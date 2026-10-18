@@ -1,0 +1,7 @@
+/vendor/
+/app_movil/.dart_tool/
+/app_movil/build/
+/app_movil/android/local.properties
+/app_movil/android/.gradle/
+*.log
+.env

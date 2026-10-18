@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Restablecer contraseña · Gestión Institucional</title>
+  <link rel="stylesheet" href="web/assets/css/app.css">
+</head>
+<body>
+  <main class="login-wrap">
+    <form id="reset-form" class="login-card">
+      <div class="brand-mark">GI</div>
+      <p class="eyebrow">RECUPERACIÓN DE CUENTA</p>
+      <h1>Nueva contraseña</h1>
+      <p class="muted">Elige una contraseña de al menos 8 caracteres.</p>
+      <div id="reset-fields">
+        <label>Nueva contraseña<input name="password" type="password" minlength="8" required></label>
+        <button class="button primary full" type="submit">Guardar contraseña</button>
+      </div>
+      <p id="reset-message" class="message" role="status"></p>
+      <a id="back-to-login" class="button primary full hidden" href="./">Volver a la página de inicio de sesión</a>
+    </form>
+  </main>
+  <script>
+    document.querySelector('#reset-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const message = document.querySelector('#reset-message');
+      try {
+        const response = await fetch('api/auth/reset-password', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            token: new URLSearchParams(location.search).get('token'),
+            password: new FormData(event.currentTarget).get('password')
+          })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'No se pudo cambiar la contraseña.');
+        message.style.color = '#248b76';
+        message.textContent = 'Contraseña actualizada correctamente.';
+        document.querySelector('#reset-fields').classList.add('hidden');
+        document.querySelector('#back-to-login').classList.remove('hidden');
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    });
+  </script>
+</body>
+</html>

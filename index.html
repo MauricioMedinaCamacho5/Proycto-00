@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#153b55">
+  <title>Gestión Institucional</title>
+  <link rel="stylesheet" href="web/assets/css/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <main id="login-screen" class="login-wrap">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">GI</div>
+      <p class="eyebrow">PLATAFORMA INSTITUCIONAL</p>
+      <h1>Bienvenido</h1>
+      <p class="muted">Inicia sesión para continuar.</p>
+      <label>Correo institucional<input name="correo" type="email" autocomplete="username" required></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="button primary full" type="submit">Iniciar sesión</button>
+      <button id="forgot-password" class="text-button" type="button">Olvidé mi contraseña</button>
+      <div class="demo-note">Administrador configurado: <strong>mauriciomedinacamacho5@gmail.com</strong><br>Ingresa con la contraseña que configuraste para esta cuenta.</div>
+      <p id="login-message" class="message" role="status"></p>
+    </form>
+  </main>
+
+  <div id="app-shell" class="app-shell hidden">
+    <aside class="sidebar">
+      <a class="brand" href="#"><span class="brand-mark small">GI</span><span>Gestión<span class="brand-light">Institucional</span></span></a>
+      <div class="sidebar-label">MENÚ PRINCIPAL</div>
+      <nav id="navigation"></nav>
+      <div class="sidebar-bottom">
+        <div id="user-summary"></div>
+        <button id="logout-button" class="logout-button">Cerrar sesión <span>↗</span></button>
+      </div>
+    </aside>
+    <main class="main-area">
+      <header class="topbar">
+        <div><p class="eyebrow" id="page-kicker">PANEL INSTITUCIONAL</p><h1 id="page-title">Resumen general</h1></div>
+        <div class="topbar-actions">
+          <div class="live-status"><span class="live-dot"></span> Datos actualizados automáticamente</div>
+          <button id="logout-top-button" class="button secondary logout-top-button" type="button">Cerrar sesión</button>
+        </div>
+      </header>
+      <section id="dashboard-view" class="view">
+        <p id="dashboard-message" class="message" role="status"></p>
+        <div id="stats-grid" class="stats-grid"></div>
+        <section class="panel alerts-panel"><div class="panel-heading"><div><h2>Alertas de inasistencia</h2><p>Estudiantes con 3 ausencias consecutivas en los últimos 30 días.</p></div></div><div id="attendance-alerts" class="alert-list"></div></section>
+        <section class="panel chart-panel">
+          <div class="panel-heading"><div><h2>Actividad del día</h2><p>Asistencia y movimientos registrados hoy</p></div><span class="period-tag">HOY</span></div>
+          <div class="chart-area"><canvas id="activity-chart" aria-label="Gráfica de actividad"></canvas></div>
+        </section>
+        <p class="refresh-note">El panel se actualiza cada 8 segundos.</p>
+      </section>
+      <section id="resource-view" class="view hidden">
+        <div class="panel table-panel">
+          <div class="panel-heading"><div><h2 id="table-title">Registros</h2><p id="table-description"></p></div><div class="table-actions"><select id="report-format" aria-label="Formato de reporte"><option value="csv">CSV</option><option value="xlsx">Excel</option><option value="pdf">PDF</option></select><button id="export-report" class="button secondary">Exportar</button><button id="add-record" class="button primary">＋ Nuevo registro</button></div></div>
+          <div id="table-message" class="message"></div>
+          <div class="table-scroll"><table><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="record-dialog">
+    <form id="record-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">GESTIÓN DE REGISTROS</p><h2 id="dialog-title">Nuevo registro</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
+      <div id="record-fields" class="form-grid"></div>
+      <p id="dialog-message" class="message"></p>
+      <div class="dialog-actions"><button class="button secondary" value="cancel">Cancelar</button><button id="save-record" class="button primary" value="submit">Guardar</button></div>
+    </form>
+  </dialog>
+  <dialog id="recovery-dialog">
+    <form id="recovery-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">RECUPERACIÓN DE CUENTA</p><h2>Restablecer contraseña</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
+      <label>Correo institucional<input name="correo" type="email" required></label>
+      <p id="recovery-message" class="message" role="status"></p>
+      <div class="dialog-actions"><button class="button secondary" value="cancel">Cancelar</button><button class="button primary" value="submit">Enviar instrucciones</button></div>
+    </form>
+  </dialog>
+  <script src="web/assets/js/app.js"></script>
+</body>
+</html>
