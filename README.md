@@ -34,13 +34,17 @@ en ese modo el navegador no ejecuta PHP y no puede iniciar sesión. Usa la
 dirección local de Apache indicada arriba.
 
 Desde la pantalla de inicio de sesión, un estudiante puede elegir **Registrarme
-como estudiante**, completar sus datos y vincular el QR único de su carnet.
-El sistema crea el usuario y el carnet en una transacción; un QR ya asociado no
-se puede reutilizar, y el rol siempre lo asigna el servidor como estudiante.
+como estudiante**, completar sus datos y vincular el código único QR o de barras
+(lineal) de su carnet. El código escaneado puede tener hasta 36 caracteres.
+El sistema crea el usuario y el carnet en una transacción; un código ya asociado
+no se puede reutilizar, y el rol siempre lo asigna el servidor como estudiante.
 Para escanear con cámara, permite el acceso cuando el navegador lo solicite y
 abre el sitio desde `localhost` o HTTPS; los navegadores bloquean la cámara en
-direcciones HTTP por IP. Si el lector QR externo no carga, se puede escribir el
-código del carnet manualmente.
+direcciones HTTP por IP. El lector reconoce códigos QR y de barras lineales
+(por ejemplo, Code 39 y Code 128). El listado y el panel de administración se
+actualizan automáticamente cada 8 segundos desde la misma base de datos. Si la
+cámara o el lector no están disponibles, se puede escribir el código del carnet
+manualmente.
 
 Cuenta administradora inicial (la contraseña temporal es `password`):
 

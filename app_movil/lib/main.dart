@@ -386,7 +386,7 @@ class _HomePageState extends State<HomePage> {
                     FilledButton.icon(
                       onPressed: _scan,
                       icon: const Icon(Icons.qr_code_scanner),
-                      label: const Text('Escanear carnet QR'),
+                      label: const Text('Escanear QR o código de barras'),
                     ),
                     const SizedBox(height: 8),
                     OutlinedButton.icon(

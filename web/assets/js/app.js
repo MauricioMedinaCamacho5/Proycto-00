@@ -20,9 +20,14 @@ const modules = {
 };
 const icons = ['◉','⌂','✓','⇄','▣','▦'];
 let currentUser = null, activeModule = null, chart = null, editId = null;
-let registrationStream = null, registrationDetector = null, registrationScanFrame = null, registrationStarting = false;
-let registrationCanvas = null, registrationCanvasContext = null;
+let registrationControls = null, registrationStarting = false, registrationScanCompleted = false, tableRefreshInProgress = false;
 const $ = (selector) => document.querySelector(selector);
+
+function refreshActiveTable() {
+  if (tableRefreshInProgress || !activeModule || $('#record-dialog').open || document.hidden) return;
+  tableRefreshInProgress = true;
+  loadTable().catch(showError).finally(() => { tableRefreshInProgress = false; });
+}
 
 async function api(path, options = {}) {
   if (location.protocol === 'file:') {
@@ -116,7 +121,8 @@ async function showDashboard() {
   setActiveNav('dashboard');
   await refreshDashboard();
   if (!window.dashboardTimer) window.dashboardTimer = setInterval(() => {
-    if (!activeModule) refreshDashboard().catch(showError);
+    if (activeModule) refreshActiveTable();
+    else refreshDashboard().catch(showError);
   }, 8000);
 }
 
@@ -163,7 +169,9 @@ async function showModule(key) {
 }
 
 async function loadTable() {
-  const data = await api(activeModule);
+  const module = activeModule;
+  const data = await api(module);
+  if (activeModule !== module) return;
   const rows = Array.isArray(data) ? data : [];
   if (!rows.length) {
     $('#table-head').innerHTML = '';
@@ -252,104 +260,68 @@ $('#login-form').addEventListener('submit', async event => {
   }
 });
 
-function stopRegistrationScanner() {
-  if (registrationScanFrame !== null) {
-    clearTimeout(registrationScanFrame);
-    registrationScanFrame = null;
-  }
-  if (registrationStream) {
-    registrationStream.getTracks().forEach(track => track.stop());
-    registrationStream = null;
-  }
+function stopRegistrationScanner(controls = registrationControls) {
+  controls?.stop();
+  registrationControls = null;
+  $('#registration-video').pause();
   $('#registration-video').srcObject = null;
   $('#registration-scanner').classList.add('hidden');
-}
-
-async function scanRegistrationFrame() {
-  if (!registrationStream) return;
-  const video = $('#registration-video');
-  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-    registrationScanFrame = window.setTimeout(scanRegistrationFrame, 100);
-    return;
-  }
-  try {
-    let qrValue = null;
-    if (registrationDetector) {
-      const codes = await registrationDetector.detect(video);
-      qrValue = codes.find(code => code.format === 'qr_code' && code.rawValue)?.rawValue;
-    } else if (window.jsQR) {
-      if (!registrationCanvas) {
-        registrationCanvas = document.createElement('canvas');
-        registrationCanvasContext = registrationCanvas.getContext('2d', {willReadFrequently:true});
-      }
-      const canvas = registrationCanvas;
-      const scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
-      canvas.width = Math.round(video.videoWidth * scale);
-      canvas.height = Math.round(video.videoHeight * scale);
-      if (!registrationCanvasContext) throw new Error('No se pudo procesar la imagen de la cámara.');
-      registrationCanvasContext.drawImage(video, 0, 0, canvas.width, canvas.height);
-      qrValue = window.jsQR(registrationCanvasContext.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)?.data;
-    } else {
-      throw new Error('No se pudo cargar el lector QR. Comprueba tu conexión o escribe el código manualmente.');
-    }
-    if (qrValue) {
-      $('#registration-qr').value = qrValue.trim();
-      $('#scanner-message').textContent = 'QR leído. Comprueba que corresponda al carnet y crea tu cuenta.';
-      stopRegistrationScanner();
-      return;
-    }
-    registrationScanFrame = window.setTimeout(scanRegistrationFrame, 100);
-  } catch (error) {
-    stopRegistrationScanner();
-    $('#scanner-message').textContent = `No se pudo leer el QR: ${error.message || 'intenta de nuevo o escribe el código manualmente.'}`;
-  }
 }
 
 $('#open-registration').addEventListener('click', () => {
   $('#registration-form').reset();
   $('#registration-message').textContent = '';
-  $('#scanner-message').textContent = 'Puedes escanearlo con la cámara o escribir el código del carnet.';
+  $('#scanner-message').textContent = 'Puedes escanear el QR o código de barras lineal con la cámara, o escribir el código manualmente.';
   $('#registration-dialog').showModal();
 });
 
 $('#close-registration').addEventListener('click', () => $('#registration-dialog').close());
 $('#cancel-registration').addEventListener('click', () => $('#registration-dialog').close());
-$('#registration-dialog').addEventListener('close', stopRegistrationScanner);
+$('#registration-dialog').addEventListener('close', () => stopRegistrationScanner());
 
 $('#scan-registration-qr').addEventListener('click', async () => {
-  if (registrationStarting || registrationStream) return;
-  $('#scanner-message').textContent = 'Solicitando permiso para usar la cámara...';
+  if (registrationStarting || registrationControls) return;
+  $('#scanner-message').textContent = 'Preparando cámara para QR y códigos de barras...';
   if (!navigator.mediaDevices?.getUserMedia) {
     $('#scanner-message').textContent = 'La cámara requiere abrir el sitio en localhost o HTTPS. También puedes escribir el código manualmente.';
     return;
   }
-  if (!('BarcodeDetector' in window) && !window.jsQR) {
-    $('#scanner-message').textContent = 'No se pudo cargar el lector QR. Comprueba tu conexión o escribe el código manualmente.';
+  if (!window.ZXingBrowser?.BrowserMultiFormatReader) {
+    $('#scanner-message').textContent = 'No se pudo cargar el lector. Comprueba tu conexión o escribe el código del carnet manualmente.';
     return;
   }
   registrationStarting = true;
   try {
-    registrationDetector = null;
-    if ('BarcodeDetector' in window) {
-      try {
-        registrationDetector = new window.BarcodeDetector({formats:['qr_code']});
-      } catch (error) {
-        if (!window.jsQR) throw error;
+    const reader = new window.ZXingBrowser.BrowserMultiFormatReader();
+    registrationScanCompleted = false;
+    const controls = await reader.decodeFromConstraints(
+      {video:{facingMode:{ideal:'environment'}},audio:false},
+      $('#registration-video'),
+      (result, error, controls) => {
+        if (!result || !$('#registration-dialog').open) return;
+        const scannedValue = result.getText().trim();
+        if (!scannedValue) return;
+        registrationScanCompleted = true;
+        if (scannedValue.length > 36) {
+          $('#scanner-message').textContent = 'El código leído supera los 36 caracteres permitidos. Escribe el identificador corto impreso en el carnet.';
+          stopRegistrationScanner(controls);
+          return;
+        }
+        $('#registration-qr').value = scannedValue;
+        $('#scanner-message').textContent = 'Código leído. Comprueba que corresponda a tu carnet y crea tu cuenta.';
+        stopRegistrationScanner(controls);
       }
-    }
-    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
-    if (!$('#registration-dialog').open) {
-      stream.getTracks().forEach(track => track.stop());
+    );
+    if (!$('#registration-dialog').open || registrationScanCompleted) {
+      controls.stop();
       return;
     }
-    registrationStream = stream;
-    $('#registration-video').srcObject = registrationStream;
+    registrationControls = controls;
     $('#registration-scanner').classList.remove('hidden');
-    $('#scanner-message').textContent = 'Apunta la cámara al QR del carnet y mantenlo visible dentro del recuadro.';
-    registrationScanFrame = window.setTimeout(scanRegistrationFrame, 100);
+    $('#scanner-message').textContent = 'Apunta la cámara al QR o al código de barras lineal del carné.';
   } catch (error) {
     stopRegistrationScanner();
-    $('#scanner-message').textContent = `No se pudo iniciar la cámara: ${error.message || 'comprueba los permisos o escribe el código manualmente.'}`;
+    $('#scanner-message').textContent = `No se pudo escanear: ${error.message || 'comprueba los permisos de cámara o escribe el código manualmente.'}`;
   } finally {
     registrationStarting = false;
   }

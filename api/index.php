@@ -316,8 +316,8 @@ try {
         if ($document === '' || strlen($document) > 30 || $firstName === '' || strlen($firstName) > 100 ||
             $lastName === '' || strlen($lastName) > 100 || !filter_var($email, FILTER_VALIDATE_EMAIL) ||
             strlen($email) > 190 || strlen($password) < 8 || strlen($phone) > 30 ||
-            !preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i', $qr)) {
-            respond(['error' => 'Complete los datos correctamente, use una contrasena de al menos 8 caracteres y escanee un QR valido del carnet.'], 422);
+            $qr === '' || strlen($qr) > 36 || preg_match('/[\x00-\x1F\x7F]/', $qr)) {
+            respond(['error' => 'Complete los datos correctamente, use una contrasena de al menos 8 caracteres y escanee un QR o codigo de barras valido del carnet.'], 422);
         }
 
         $db->beginTransaction();

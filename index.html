@@ -38,10 +38,10 @@
         <label>Contraseña<input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
         <label>Confirmar contraseña<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label>
       </div>
-      <label class="qr-field">QR del carnet
-        <span class="qr-input-row"><input id="registration-qr" name="codigo_qr" maxlength="36" placeholder="Escanea el QR o escribe su código" autocomplete="off" required><button id="scan-registration-qr" class="button secondary" type="button">Escanear QR</button></span>
+      <label class="qr-field">QR o código de barras del carné
+        <span class="qr-input-row"><input id="registration-qr" name="codigo_qr" maxlength="36" placeholder="Escanea o escribe el código del carné" autocomplete="off" required><button id="scan-registration-qr" class="button secondary" type="button">Escanear</button></span>
       </label>
-      <p id="scanner-message" class="scanner-message" role="status">Puedes escanearlo con la cámara o escribir el código del carnet.</p>
+      <p id="scanner-message" class="scanner-message" role="status">Puedes escanear el QR o código de barras lineal con la cámara, o escribir el código manualmente.</p>
       <div id="registration-scanner" class="registration-scanner hidden"><video id="registration-video" autoplay playsinline muted></video></div>
       <p id="registration-message" class="message" role="status"></p>
       <div class="dialog-actions"><button id="cancel-registration" class="button secondary" type="button">Cancelar</button><button id="submit-registration" class="button primary" type="submit">Crear cuenta</button></div>
@@ -62,7 +62,7 @@
       <header class="topbar">
         <div><p class="eyebrow" id="page-kicker">PANEL INSTITUCIONAL</p><h1 id="page-title">Resumen general</h1></div>
         <div class="topbar-actions">
-          <div class="live-status"><span class="live-dot"></span> Datos actualizados automáticamente</div>
+          <div class="live-status"><span class="live-dot"></span> Actualización automática cada 8 s</div>
           <button id="logout-top-button" class="button secondary logout-top-button" type="button">Cerrar sesión</button>
         </div>
       </header>
@@ -102,7 +102,7 @@
       <div class="dialog-actions"><button class="button secondary" value="cancel">Cancelar</button><button class="button primary" value="submit">Enviar instrucciones</button></div>
     </form>
   </dialog>
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="web/assets/js/app.js?v=20261018-register3"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
+  <script src="web/assets/js/app.js?v=20261018-barcode"></script>
 </body>
 </html>
