@@ -1,6 +1,6 @@
-# Gestión Institucional
+# Proyecto01 — Gestión Institucional
 
-Aplicación inicial para XAMPP con una API PHP/PDO compartida por el sitio web y
+Aplicación institucional (proyecto de prueba y práctica) para XAMPP con una API PHP/PDO compartida por el sitio web y
 la aplicación Android. Los datos persisten en MySQL/MariaDB; el panel web
 actualiza sus indicadores cada 8 segundos.
 
