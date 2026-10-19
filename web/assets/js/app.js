@@ -23,6 +23,7 @@ const icons = ['◉','⌂','✓','⇄','▣','▦'];
 let currentUser = null, activeModule = null, chart = null, editId = null;
 let registrationControls = null, registrationStarting = false, registrationScanCompleted = false, tableRefreshInProgress = false;
 let loginScannerControls = null, loginScannerStarting = false, loginScanCompleted = false;
+let loginMode = 'standard';
 const $ = (selector) => document.querySelector(selector);
 
 function refreshActiveTable() {
@@ -101,12 +102,22 @@ function renderNavigation() {
   Object.entries(modules).forEach(([key, item]) => {
     if (item.roles.includes(currentUser.rol)) entries.push([key,item.label,item.icon]);
   });
-  $('#navigation').innerHTML = entries.map(([key,label,icon]) => `<a href="#${key}" class="nav-link" data-view="${key}"><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span></a>`).join('');
+  $('#navigation').innerHTML = entries.map(([key,label,icon]) => `<a href="#${key}" class="nav-link" data-view="${key}"><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span>${key === 'registration-requests' ? '<span class="nav-badge hidden" id="registration-request-count"></span>' : ''}</a>`).join('');
   $('#navigation').querySelectorAll('[data-view]').forEach(link => link.addEventListener('click', event => {
     event.preventDefault();
     const key = link.dataset.view;
     key === 'dashboard' ? showDashboard() : showModule(key);
   }));
+  if (currentUser.rol === 'administrador') refreshRegistrationRequestCount().catch(showError);
+}
+
+async function refreshRegistrationRequestCount() {
+  if (currentUser?.rol !== 'administrador') return;
+  const count = await api('registration-requests/count');
+  const badge = $('#registration-request-count');
+  if (!badge) return;
+  badge.textContent = Number(count) > 99 ? '99+' : String(count);
+  badge.classList.toggle('hidden', Number(count) === 0);
 }
 
 const statConfig = [
@@ -128,6 +139,7 @@ async function showDashboard() {
   setActiveNav('dashboard');
   await refreshDashboard();
   if (!window.dashboardTimer) window.dashboardTimer = setInterval(() => {
+    if (currentUser.rol === 'administrador') refreshRegistrationRequestCount().catch(showError);
     if (activeModule) refreshActiveTable();
     else refreshDashboard().catch(showError);
   }, 3000);
@@ -152,7 +164,7 @@ async function refreshDashboard() {
       chart.data.datasets[0].data = values;
       chart.update();
     } else {
-      chart = new Chart(ctx, {type:'bar',data:{labels:['Asistencia','Accesos','Reservas'],datasets:[{data:values,backgroundColor:['#1da98e','#527ca7','#e3a84f'],borderRadius:7,maxBarThickness:48}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0},grid:{color:'#eef2f4'}},x:{grid:{display:false}}}}});
+      chart = new Chart(ctx, {type:'bar',data:{labels:['Asistencia','Accesos','Reservas'],datasets:[{data:values,backgroundColor:['#087c45','#16894f','#75ad70'],borderRadius:7,maxBarThickness:48}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0},grid:{color:'#e7eee4'}},x:{grid:{display:false}}}}});
     }
   }
 }
@@ -247,6 +259,7 @@ function reviewRegistration(id, decision) {
   api(`registration-requests/${id}/${decision}`, {method:'POST',body:'{}'})
     .then(async result => {
       await loadTable();
+      await refreshRegistrationRequestCount();
       $('#table-message').textContent = result.message;
     })
     .catch(showError);
@@ -284,7 +297,20 @@ $('#login-form').addEventListener('submit', async event => {
   $('#login-message').textContent = '';
   const form = new FormData(event.currentTarget);
   try {
-    await api('auth/login',{method:'POST',body:JSON.stringify({correo:form.get('correo'),password:form.get('password')})});
+    if (loginMode === 'staff') {
+      const documentNumber = $('#login-staff-document').value;
+      if (!documentNumber) {
+        $('#login-message').textContent = 'Escanea primero el código lineal de tu cédula.';
+        return;
+      }
+      await api('auth/staff-barcode-login',{method:'POST',body:JSON.stringify({
+        documento:documentNumber,
+        correo:form.get('correo'),
+        password:form.get('password')
+      })});
+    } else {
+      await api('auth/login',{method:'POST',body:JSON.stringify({correo:form.get('correo'),password:form.get('password')})});
+    }
     await startApp();
   } catch (error) {
     $('#login-message').textContent = error.message;
@@ -295,6 +321,8 @@ $('#landing-admin-login').addEventListener('click', showLogin);
 $('#landing-admin-open').addEventListener('click', showLogin);
 $('#landing-student-login').addEventListener('click', showLogin);
 $('#login-home').addEventListener('click', showLanding);
+$('#landing-staff-login').addEventListener('click', () => showLogin('staff'));
+$('#switch-login-mode').addEventListener('click', () => showLogin('standard'));
 $('#landing-student-register').addEventListener('click', () => openRegistration('estudiante'));
 $('#landing-register').addEventListener('click', () => openRegistration('estudiante'));
 $('#landing-staff-register').addEventListener('click', () => openRegistration('instructor'));
@@ -305,9 +333,48 @@ function showLanding() {
   $('#landing-screen').classList.remove('hidden');
 }
 
-function showLogin() {
+function showLogin(mode = 'standard') {
+  stopLoginScanner();
+  loginMode = mode;
+  $('#login-form').reset();
+  $('#login-staff-document').value = '';
+  $('#login-message').textContent = '';
+  $('#login-scan-title').textContent = mode === 'staff' ? 'Escaneo para personal y administración' : 'Acceso para estudiantes';
+  $('#login-scan-message').textContent = mode === 'staff'
+    ? 'Escanea la cédula con la cámara o elige una foto. Después confirma tu correo y contraseña.'
+    : 'Escanea o selecciona una foto del código lineal de tu documento. Cualquier persona con una copia podrá entrar a esta cuenta.';
+  $('#login-mode-warning').classList.toggle('hidden', mode !== 'staff');
+  $('#switch-login-mode').classList.toggle('hidden', mode !== 'staff');
+  $('#login-screen h1').textContent = mode === 'staff' ? 'Equipo institucional' : 'Acceso a tu cuenta';
   $('#landing-screen').classList.add('hidden');
   $('#login-screen').classList.remove('hidden');
+}
+
+function showLoginWithScannedStaffDocument(value) {
+  const documentNumber = value.trim();
+  if (!documentNumber) return;
+  loginScanCompleted = true;
+  stopLoginScanner();
+  $('#login-staff-document').value = documentNumber;
+  $('#login-scan-message').textContent = 'Cédula leída. Completa tu correo y contraseña para continuar.';
+  $('#login-form input[name="correo"]').focus();
+}
+
+function showLoginWithBarcode(value, controls = loginScannerControls) {
+  if (loginMode === 'staff') {
+    stopLoginScanner(controls);
+    showLoginWithScannedStaffDocument(value);
+    return;
+  }
+  loginWithBarcode(value, controls);
+}
+
+function showLoginWithBarcodePhoto(value) {
+  if (loginMode === 'staff') {
+    showLoginWithScannedStaffDocument(value);
+    return;
+  }
+  loginWithBarcode(value);
 }
 
 function openRegistration(role = 'estudiante') {
@@ -326,14 +393,7 @@ function updateRegistrationRole() {
   $('#registration-title').textContent = student ? 'Registrar como estudiante' : 'Solicitar cuenta de personal';
   $('#registration-intro').textContent = student
     ? 'Completa tus datos y escanea el código lineal de tu carné o elige una foto. El sistema genera tu QR digital y activa tu cuenta de estudiante.'
-    : 'Completa tus datos para enviar una solicitud. Un administrador debe aprobarla antes de que puedas ingresar.';
-  $('#registration-document-field').classList.toggle('hidden', !student);
-  $('#registration-document').required = student;
-  $('#registration-staff-document-field').classList.toggle('hidden', student);
-  $('#registration-staff-document').required = !student;
-  document.querySelectorAll('.student-registration-only').forEach(element => {
-    element.classList.toggle('hidden', !student || element.id === 'registration-scanner');
-  });
+    : 'Completa tus datos y escanea el código lineal de tu cédula o elige una foto. Tu cuenta quedará pendiente hasta que un administrador la apruebe en la pestaña Solicitudes de registro del panel de administración.';
   $('#submit-registration').textContent = student ? 'Crear cuenta' : 'Enviar solicitud';
 }
 
@@ -380,7 +440,7 @@ $('#scan-login-barcode').addEventListener('click', async () => {
       $('#login-video'),
       (result, error, scanControls) => {
         if (!result || loginScanCompleted) return;
-        loginWithBarcode(result.getText(), scanControls);
+        showLoginWithBarcode(result.getText(), scanControls);
       }
     );
     if (loginScanCompleted) {
@@ -419,7 +479,7 @@ $('#login-photo').addEventListener('change', async event => {
     image.src = imageUrl;
     await image.decode();
     const result = await createBarcodeReader().decodeFromImageElement(image);
-    await loginWithBarcode(result.getText());
+    showLoginWithBarcodePhoto(result.getText());
   } catch (error) {
     const message = error?.name === 'NotFoundException'
       ? 'No se encontró un código legible. Elige una foto nítida con el código completo.'
@@ -459,13 +519,16 @@ function applyRegistrationBarcode(value, controls = registrationControls) {
   const scannedValue = value.trim();
   if (!scannedValue) return;
   registrationScanCompleted = true;
+  const student = $('#registration-role').value === 'estudiante';
   if (scannedValue.length > 30) {
     $('#scanner-message').textContent = 'El documento leído supera los 30 caracteres permitidos. Escribe el número manualmente.';
     stopRegistrationScanner(controls);
     return;
   }
   $('#registration-document').value = scannedValue;
-  $('#scanner-message').textContent = 'Documento leído. Comprueba que el número sea correcto y crea tu cuenta.';
+  $('#scanner-message').textContent = student
+    ? 'Documento leído. Comprueba que el número sea correcto y crea tu cuenta.'
+    : 'Documento leído. Comprueba el número y envía tu solicitud para que un administrador la revise.';
   stopRegistrationScanner(controls);
 }
 
@@ -558,7 +621,7 @@ $('#registration-form').addEventListener('submit', async event => {
   try {
     const result = await api('auth/register', {method:'POST',body:JSON.stringify({
       rol:values.get('rol'),
-      documento:values.get('rol') === 'estudiante' ? values.get('documento') : values.get('personal_documento'),
+      documento:values.get('documento'),
       nombres:values.get('nombres'),
       apellidos:values.get('apellidos'),
       correo:values.get('correo'),

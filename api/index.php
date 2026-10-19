@@ -365,6 +365,11 @@ try {
         $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
         respond(['data' => ['user' => currentUser($db), 'message' => 'Cuenta de estudiante creada correctamente.']]);
     }
+    if ($route === 'registration-requests' && ($parts[1] ?? '') === 'count' && $method === 'GET') {
+        requireRoles($user, ['administrador']);
+        $count = (int)$db->query("SELECT COUNT(*) FROM solicitudes_registro WHERE estado = 'pendiente'")->fetchColumn();
+        respond(['data' => $count]);
+    }
     if ($route === 'registration-requests' && $method === 'GET') {
         requireRoles($user, ['administrador']);
         $stmt = $db->query("SELECT s.id, u.documento, u.nombres, u.apellidos, u.correo, r.nombre AS rol, s.solicitada_en
@@ -425,6 +430,33 @@ try {
         $_SESSION['last_activity'] = time();
         $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$record['id']]);
         audit($db, (int)$record['id'], 'inicio_sesion', 'usuarios', (int)$record['id']);
+        respond(['data' => currentUser($db)]);
+    }
+    if ($route === 'auth' && ($parts[1] ?? '') === 'staff-barcode-login' && $method === 'POST') {
+        $data = body();
+        $document = $data['documento'] ?? null;
+        $email = $data['correo'] ?? null;
+        $password = $data['password'] ?? null;
+        if (!is_string($document) || trim($document) === '' || strlen(trim($document)) > 30 ||
+            !is_string($email) || !filter_var(trim($email), FILTER_VALIDATE_EMAIL) ||
+            !is_string($password) || $password === '') {
+            respond(['error' => 'Escanea tu cédula e ingresa el correo y la contraseña de la cuenta.'], 422);
+        }
+        $stmt = $db->prepare("SELECT u.id, u.password_hash FROM usuarios u
+            JOIN roles r ON r.id = u.rol_id AND r.nombre IN ('administrador','instructor','portero')
+            WHERE u.documento = ? AND u.correo = ? AND u.activo = 1
+              AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL)
+            LIMIT 1");
+        $stmt->execute([trim($document), trim($email)]);
+        $record = $stmt->fetch();
+        if (!$record || !password_verify($password, $record['password_hash'])) {
+            respond(['error' => 'No se pudo verificar la cédula, el correo o la contraseña, o la cuenta está pendiente o bloqueada.'], 401);
+        }
+        session_regenerate_id(true);
+        $_SESSION['user_id'] = (int)$record['id'];
+        $_SESSION['last_activity'] = time();
+        $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$record['id']]);
+        audit($db, (int)$record['id'], 'inicio_sesion_codigo_cedula', 'usuarios', (int)$record['id']);
         respond(['data' => currentUser($db)]);
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'barcode-login' && $method === 'POST') {

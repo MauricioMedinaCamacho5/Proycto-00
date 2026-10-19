@@ -11,6 +11,7 @@ const apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://192.168.1.10/gestion/api',
 );
+const senaGreen = Color(0xff087c45);
 
 void main() {
   runApp(const GestionApp());
@@ -59,12 +60,98 @@ class GestionApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xff153b55),
-            primary: const Color(0xff153b55),
+            seedColor: senaGreen,
+            primary: senaGreen,
+          ),
+          scaffoldBackgroundColor: const Color(0xfff5f8f1),
+          cardColor: Colors.white,
+          appBarTheme: const AppBarTheme(
+            backgroundColor: senaGreen,
+            foregroundColor: Colors.white,
+            centerTitle: false,
+          ),
+          inputDecorationTheme: InputDecorationTheme(
+            filled: true,
+            fillColor: Colors.white,
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: senaGreen, width: 2),
+            ),
+          ),
+          filledButtonTheme: FilledButtonThemeData(
+            style: FilledButton.styleFrom(
+              backgroundColor: senaGreen,
+              foregroundColor: Colors.white,
+            ),
           ),
           useMaterial3: true,
         ),
         home: const LoginPage(),
+      );
+}
+
+class InstitutionMark extends StatelessWidget {
+  const InstitutionMark({this.size = 48, super.key});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => Image.asset(
+        'assets/images/sena-logo.png',
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+      );
+}
+
+class InstitutionBrand extends StatelessWidget {
+  const InstitutionBrand({this.compact = false, super.key});
+
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          InstitutionMark(size: compact ? 36 : 48),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Servicio Nacional de Aprendizaje',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: compact ? 11 : 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'SENA · Centro de la Industria, la Empresa y los Servicios',
+                  maxLines: compact ? 1 : 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: compact ? const Color(0xffe0efe3) : const Color(0xff718376),
+                    fontSize: compact ? 8 : 10,
+                  ),
+                ),
+                Text(
+                  'FORMACIÓN · SERVICIO · OPORTUNIDADES',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: compact ? const Color(0xffd5e8d8) : const Color(0xff43835a),
+                    fontSize: compact ? 7 : 8,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       );
 }
 
@@ -117,47 +204,49 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) => Scaffold(
         body: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
-              padding: const EdgeInsets.all(28),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Icon(Icons.account_balance, size: 54),
-                  const SizedBox(height: 18),
-                  Text('Gestión Institucional',
-                      style: Theme.of(context).textTheme.headlineSmall,
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 26),
-                  TextField(
-                    controller: _email,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Correo institucional',
-                      border: OutlineInputBorder(),
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Card(
+              margin: const EdgeInsets.all(20),
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const InstitutionBrand(),
+                    const SizedBox(height: 26),
+                    Text('Acceso a tu cuenta',
+                        style: Theme.of(context).textTheme.headlineSmall),
+                    const SizedBox(height: 18),
+                    TextField(
+                      controller: _email,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Correo institucional',
+                        border: OutlineInputBorder(),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 14),
-                  TextField(
-                    controller: _password,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Contraseña',
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: _password,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Contraseña',
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (_) => _login(),
                     ),
-                    onSubmitted: (_) => _login(),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(_error!, style: const TextStyle(color: Colors.red)),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(_error!, style: const TextStyle(color: Colors.red)),
+                    ],
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: _busy ? null : _login,
+                      child: Text(_busy ? 'Ingresando…' : 'Iniciar sesión'),
+                    ),
                   ],
-                  const SizedBox(height: 20),
-                  FilledButton(
-                    onPressed: _busy ? null : _login,
-                    child: Text(_busy ? 'Ingresando…' : 'Iniciar sesión'),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -294,7 +383,7 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: const Text('Panel institucional'),
+          title: const InstitutionBrand(compact: true),
           actions: [IconButton(onPressed: _logout, icon: const Icon(Icons.logout))],
         ),
         body: RefreshIndicator(
@@ -425,7 +514,9 @@ class _ScanPageState extends State<ScanPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Escanear carnet')),
+        appBar: AppBar(
+          title: const InstitutionBrand(compact: true),
+        ),
         body: MobileScanner(
           onDetect: (capture) {
             if (_handled) return;

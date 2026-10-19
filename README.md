@@ -38,17 +38,30 @@ La página principal presenta el Servicio Nacional de Aprendizaje SENA y su
 Centro de la Industria, la Empresa y los Servicios. El panel principal y la
 administración de datos requieren una sesión de administrador; instructores,
 estudiantes y personal de portería solo ven los módulos permitidos por su rol.
+La portada, los formularios de acceso, registro y recuperación, el panel web y
+la app Android comparten la identidad visual verde, el emblema «S» y el lema
+«Formación · Servicio · Oportunidades».
+El logotipo institucional se encuentra en `web/assets/images/sena-logo.png`
+y `app_movil/assets/images/sena-logo.png` para el sitio web y la app Android.
 
 Desde **Registrar como**, un estudiante puede llenar el documento usando la
 cámara o una foto del código lineal de su carné. La foto se procesa en el
 navegador y no se envía al servidor. El sistema genera un QR digital único para
 la cuenta. Instructores y personal de portería pueden enviar una solicitud; su
 cuenta permanece inactiva hasta que un administrador la apruebe en **Solicitudes
-de registro**. El registro público no permite crear administradores.
+de registro**. La solicitud lleva el documento leído del código lineal de la
+cédula o de una foto. El administrador inicia sesión, abre esa pestaña, revisa
+la solicitud y pulsa **Aprobar**; el sistema muestra un contador junto a la
+pestaña cuando hay solicitudes pendientes. El registro público no permite crear
+administradores.
 Un estudiante registrado también puede ingresar con **Escanear carné** o
 **Elegir foto**. El acceso por código lineal usa el documento como única
 credencial; cualquier persona con una copia legible puede entrar a esa cuenta.
-Las demás cuentas ingresan con correo y contraseña.
+En **Ingresar como equipo institucional**, instructores, portería y
+administradores escanean el código de barras de la cédula con la cámara o una
+foto; luego verifican su correo y contraseña para abrir la cuenta. La cédula
+por sí sola no da acceso al panel administrativo, porque el código lineal es
+visible y se puede copiar.
 Para escanear con cámara, permite el acceso cuando el navegador lo solicite y
 abre el sitio desde `localhost` o HTTPS; los navegadores bloquean la cámara en
 direcciones HTTP por IP. El lector reconoce códigos de barras lineales (Code 39,

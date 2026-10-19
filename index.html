@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#087c45">
   <title>Gestión Institucional · SENA</title>
-  <link rel="stylesheet" href="web/assets/css/app.css?v=20261018-sena-home-v4">
+  <link rel="icon" type="image/png" href="web/assets/images/sena-logo.png">
+  <link rel="stylesheet" href="web/assets/css/app.css?v=20261018-sena-logo-v1">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
   <main id="landing-screen" class="landing-page">
     <header class="landing-header">
-      <a class="landing-brand" href="#" aria-label="Gestión Institucional SENA">
-        <span class="sena-mark" aria-hidden="true">S</span>
-        <span>Servicio Nacional de Aprendizaje<strong>SENA · Centro de formación</strong></span>
+      <a class="institution-lockup landing-brand" href="#" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
+        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
+        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
       </a>
       <button id="landing-admin-login" class="button landing-admin-button" type="button">Acceso administración <span aria-hidden="true">→</span></button>
     </header>
@@ -24,13 +25,14 @@
         <p class="hero-description">Gestión Institucional del Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios.</p>
         <div class="hero-actions">
           <button id="landing-student-login" class="button landing-primary" type="button">Ingresar como estudiante <span aria-hidden="true">→</span></button>
+          <button id="landing-staff-login" class="button landing-primary" type="button">Ingresar como equipo institucional <span aria-hidden="true">→</span></button>
           <button id="landing-register" class="button landing-secondary" type="button">Registrar como <span aria-hidden="true">＋</span></button>
         </div>
         <div class="landing-message" id="landing-message" role="status"></div>
       </div>
       <div class="hero-art" aria-hidden="true">
         <div class="hero-sun"></div><div class="hero-orbit orbit-one"></div><div class="hero-orbit orbit-two"></div>
-        <div class="hero-panel"><span class="hero-panel-mark">S</span><span class="hero-panel-caption">CONOCIMIENTO<br><strong>QUE TRANSFORMA</strong></span></div>
+        <div class="hero-panel"><img class="hero-panel-mark" src="web/assets/images/sena-logo.png" alt=""><span class="hero-panel-caption">CONOCIMIENTO<br><strong>QUE TRANSFORMA</strong></span></div>
         <div class="hero-leaf leaf-one"></div><div class="hero-leaf leaf-two"></div><div class="hero-leaf leaf-three"></div>
         <span class="hero-location">INDUSTRIA · EMPRESA · SERVICIOS</span>
       </div>
@@ -43,8 +45,8 @@
       </article>
       <article class="landing-card staff-card">
         <span class="landing-card-icon" aria-hidden="true">02</span><p class="eyebrow">EQUIPO INSTITUCIONAL</p>
-        <h2>Instructores y portería.</h2><p>Envía una solicitud de acceso. Un administrador revisará y aprobará la cuenta.</p>
-        <button id="landing-staff-register" class="landing-link" type="button">Solicitar registro de personal <span aria-hidden="true">→</span></button>
+        <h2>Equipo institucional.</h2><p>Instructores y portería solicitan acceso. El personal escanea su cédula y confirma con su contraseña.</p>
+        <button id="landing-staff-register" class="landing-link" type="button">Solicitar como instructor o portería <span aria-hidden="true">→</span></button>
       </article>
       <article class="landing-card admin-card">
         <span class="landing-card-icon" aria-hidden="true">03</span><p class="eyebrow">ÁREA PRIVADA</p>
@@ -58,25 +60,35 @@
   <main id="login-screen" class="login-wrap hidden">
     <form id="login-form" class="login-card">
       <button id="login-home" class="back-home" type="button">← Volver al inicio</button>
-      <div class="brand-mark">GI</div>
+      <div class="institution-lockup auth-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
+        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
+        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+      </div>
       <p class="eyebrow">GESTIÓN INSTITUCIONAL · SENA</p>
       <h1>Acceso a tu cuenta</h1>
       <p class="muted">Ingresa con tu correo y contraseña. El acceso con carné está disponible para estudiantes.</p>
-      <p class="login-scan-title">Acceso para estudiantes</p>
+      <p id="login-scan-title" class="login-scan-title">Acceso para estudiantes</p>
       <div class="login-scan-actions"><button id="scan-login-barcode" class="button secondary" type="button">Escanear carné</button><button id="choose-login-photo" class="button secondary" type="button">Elegir foto</button></div>
       <input id="login-photo" class="hidden" type="file" accept="image/*">
       <div id="login-scanner" class="registration-scanner hidden"><video id="login-video" autoplay playsinline muted></video></div>
       <p id="login-scan-message" class="scanner-message" role="status">Escanea o selecciona una foto del código lineal de tu documento. Cualquier persona con una copia podrá entrar a esta cuenta.</p>
+      <input id="login-staff-document" type="hidden">
+      <p id="login-mode-warning" class="login-mode-warning hidden">Para proteger las cuentas de personal y administración, después de escanear también debes confirmar tu correo y contraseña.</p>
       <label>Correo institucional<input name="correo" type="email" autocomplete="username" required></label>
       <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="button primary full" type="submit">Iniciar sesión</button>
       <button id="forgot-password" class="text-button" type="button">Olvidé mi contraseña</button>
+      <button id="switch-login-mode" class="text-button hidden" type="button">Cambiar a acceso de estudiante</button>
       <p id="login-message" class="message" role="status"></p>
     </form>
   </main>
 
   <dialog id="registration-dialog">
     <form id="registration-form">
+      <div class="institution-lockup dialog-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
+        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
+        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+      </div>
       <div class="dialog-heading"><div><p class="eyebrow">NUEVA CUENTA</p><h2 id="registration-title">Registrar como estudiante</h2></div><button id="close-registration" class="icon-button" type="button" aria-label="Cerrar">×</button></div>
       <p id="registration-intro" class="registration-intro"></p>
       <div class="form-grid registration-fields">
@@ -87,11 +99,10 @@
             <option value="portero">Portería · requiere aprobación</option>
           </select>
         </label>
-        <label id="registration-document-field" class="document-field student-registration-only">Documento
+        <label id="registration-document-field" class="document-field">Documento
           <span class="qr-input-row"><input id="registration-document" name="documento" maxlength="30" autocomplete="off" required><button id="scan-registration-qr" class="button secondary" type="button">Usar cámara</button><button id="choose-registration-photo" class="button secondary" type="button">Elegir foto</button></span>
         </label>
-        <label id="registration-staff-document-field" class="registration-wide hidden">Documento<input id="registration-staff-document" name="personal_documento" maxlength="30" autocomplete="off"></label>
-        <input id="registration-photo" class="hidden student-registration-only" type="file" accept="image/*">
+        <input id="registration-photo" class="hidden" type="file" accept="image/*">
         <label>Teléfono (opcional)<input name="telefono" maxlength="30" type="tel" autocomplete="tel"></label>
         <label>Nombres<input name="nombres" maxlength="100" autocomplete="given-name" required></label>
         <label>Apellidos<input name="apellidos" maxlength="100" autocomplete="family-name" required></label>
@@ -99,8 +110,8 @@
         <label>Contraseña<input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
         <label>Confirmar contraseña<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label>
       </div>
-      <p id="scanner-message" class="scanner-message student-registration-only" role="status">El escáner lee el número del documento impreso en el código de barras.</p>
-      <div id="registration-scanner" class="registration-scanner student-registration-only hidden"><video id="registration-video" autoplay playsinline muted></video></div>
+      <p id="scanner-message" class="scanner-message" role="status">El escáner lee el número del documento impreso en el código de barras.</p>
+      <div id="registration-scanner" class="registration-scanner hidden"><video id="registration-video" autoplay playsinline muted></video></div>
       <p id="registration-message" class="message" role="status"></p>
       <div class="dialog-actions"><button id="cancel-registration" class="button secondary" type="button">Cancelar</button><button id="submit-registration" class="button primary" type="submit">Crear cuenta</button></div>
     </form>
@@ -108,7 +119,10 @@
 
   <div id="app-shell" class="app-shell hidden">
     <aside class="sidebar">
-      <a class="brand" href="#"><span class="brand-mark small">GI</span><span>Gestión<span class="brand-light">Institucional</span></span></a>
+      <a class="institution-lockup app-brand" href="#" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
+        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
+        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+      </a>
       <div class="sidebar-label">MENÚ PRINCIPAL</div>
       <nav id="navigation"></nav>
       <div class="sidebar-bottom">
@@ -146,6 +160,10 @@
 
   <dialog id="record-dialog">
     <form id="record-form" method="dialog">
+      <div class="institution-lockup dialog-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
+        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
+        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+      </div>
       <div class="dialog-heading"><div><p class="eyebrow">GESTIÓN DE REGISTROS</p><h2 id="dialog-title">Nuevo registro</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
       <div id="record-fields" class="form-grid"></div>
       <p id="dialog-message" class="message"></p>
@@ -154,6 +172,10 @@
   </dialog>
   <dialog id="recovery-dialog">
     <form id="recovery-form" method="dialog">
+      <div class="institution-lockup dialog-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
+        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
+        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong></span>
+      </div>
       <div class="dialog-heading"><div><p class="eyebrow">RECUPERACIÓN DE CUENTA</p><h2>Restablecer contraseña</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
       <label>Correo institucional<input name="correo" type="email" required></label>
       <p id="recovery-message" class="message" role="status"></p>
@@ -161,6 +183,6 @@
     </form>
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
-  <script src="web/assets/js/app.js?v=20261018-sena-home-v4"></script>
+  <script src="web/assets/js/app.js?v=20261018-sena-logo-v1"></script>
 </body>
 </html>
