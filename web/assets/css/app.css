@@ -31,3 +31,16 @@
 .logout-top-button{display:none}
 @media(max-width:950px){.sidebar{width:100%}.main-area{margin-left:0;padding:27px 22px}.sidebar-bottom{gap:10px}}
 @media(max-width:650px){.sidebar{position:sticky;inset:auto;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand account" "navigation navigation";gap:8px;padding:9px 12px}.brand{min-width:0}.sidebar-bottom{padding:0}.sidebar-bottom #user-summary{display:none}.logout-button{padding:7px 10px;font-size:11px}.sidebar nav{display:flex;min-width:0;overflow-x:auto;gap:7px;padding:2px 1px 5px}.nav-link{min-height:40px;flex:0 0 auto;padding:4px 10px}.nav-label{display:inline}.nav-icon{flex-basis:28px;width:28px;height:28px}.nav-link:hover{transform:translateY(-2px)}.main-area{margin:0;padding:22px 14px}.topbar-actions{align-items:flex-end;flex-direction:column;gap:8px}.topbar .live-status{max-width:none}}
+.registration-open{margin-top:12px}
+.registration-intro{color:var(--muted);font-size:13px;line-height:1.55;margin:12px 0 18px}
+.registration-fields{gap:0 15px}
+.registration-wide{grid-column:1/-1}
+.qr-field{margin-bottom:6px}
+.qr-input-row{display:flex;align-items:stretch;gap:8px}
+.qr-input-row input{min-width:0}
+.qr-input-row .button{flex:0 0 auto;white-space:nowrap}
+.scanner-message{color:var(--muted);font-size:11px;line-height:1.5;margin:5px 0}
+.registration-scanner{margin-top:10px;overflow:hidden;border-radius:11px;background:#0b2436}
+.registration-scanner video{display:block;width:100%;max-height:300px;object-fit:cover}
+.registration-scanner.hidden{display:none}
+@media(max-width:650px){.login-card{padding:30px 23px}.registration-fields{grid-template-columns:1fr}.registration-wide{grid-column:auto}#registration-dialog{padding:20px}.qr-input-row{flex-direction:column}.qr-input-row .button{width:100%}}

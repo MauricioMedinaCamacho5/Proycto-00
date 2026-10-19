@@ -295,6 +295,65 @@ try {
     if ($route === 'health' && $method === 'GET') {
         respond(['status' => 'ok', 'service' => 'gestion-institucional']);
     }
+    if ($route === 'auth' && ($parts[1] ?? '') === 'register' && $method === 'POST') {
+        $data = body();
+        foreach (['documento','nombres','apellidos','correo','password','codigo_qr'] as $field) {
+            if (!isset($data[$field]) || !is_string($data[$field])) {
+                respond(['error' => 'Faltan datos obligatorios o tienen un formato incorrecto.'], 422);
+            }
+        }
+        if (isset($data['telefono']) && !is_string($data['telefono'])) {
+            respond(['error' => 'El telefono debe ser texto.'], 422);
+        }
+        $document = trim($data['documento']);
+        $firstName = trim($data['nombres']);
+        $lastName = trim($data['apellidos']);
+        $email = trim($data['correo']);
+        $password = $data['password'];
+        $phone = trim($data['telefono'] ?? '');
+        $qr = trim($data['codigo_qr']);
+
+        if ($document === '' || strlen($document) > 30 || $firstName === '' || strlen($firstName) > 100 ||
+            $lastName === '' || strlen($lastName) > 100 || !filter_var($email, FILTER_VALIDATE_EMAIL) ||
+            strlen($email) > 190 || strlen($password) < 8 || strlen($phone) > 30 ||
+            !preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i', $qr)) {
+            respond(['error' => 'Complete los datos correctamente, use una contrasena de al menos 8 caracteres y escanee un QR valido del carnet.'], 422);
+        }
+
+        $db->beginTransaction();
+        $duplicate = $db->prepare('SELECT 1 FROM usuarios WHERE documento = ? OR correo = ? LIMIT 1');
+        $duplicate->execute([$document, $email]);
+        if ($duplicate->fetchColumn()) {
+            $db->rollBack();
+            respond(['error' => 'Ya existe una cuenta con ese documento o correo.'], 409);
+        }
+        $card = $db->prepare('SELECT 1 FROM carnets WHERE codigo_qr = ? LIMIT 1');
+        $card->execute([$qr]);
+        if ($card->fetchColumn()) {
+            $db->rollBack();
+            respond(['error' => 'Este QR ya esta vinculado a una cuenta. Contacte al administrador si necesita ayuda.'], 409);
+        }
+        $role = $db->prepare("SELECT id FROM roles WHERE nombre = 'estudiante' LIMIT 1");
+        $role->execute();
+        $roleId = $role->fetchColumn();
+        if (!$roleId) {
+            $db->rollBack();
+            respond(['error' => 'No se encontro el rol de estudiante. Contacte al administrador.'], 500);
+        }
+
+        $insert = $db->prepare('INSERT INTO usuarios (rol_id,documento,nombres,apellidos,correo,password_hash,telefono) VALUES (?,?,?,?,?,?,?)');
+        $insert->execute([(int)$roleId, $document, $firstName, $lastName, $email, password_hash($password, PASSWORD_DEFAULT), $phone !== '' ? $phone : null]);
+        $userId = (int)$db->lastInsertId();
+        $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$userId, $qr]);
+        audit($db, $userId, 'registro_publico', 'usuarios', $userId, ['rol' => 'estudiante']);
+        $db->commit();
+
+        session_regenerate_id(true);
+        $_SESSION['user_id'] = $userId;
+        $_SESSION['last_activity'] = time();
+        $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
+        respond(['data' => ['user' => currentUser($db), 'message' => 'Cuenta de estudiante creada correctamente.']]);
+    }
     if ($route === 'auth' && ($parts[1] ?? '') === 'login' && $method === 'POST') {
         $data = body();
         $stmt = $db->prepare('SELECT u.id, u.password_hash, u.activo FROM usuarios u WHERE u.correo = ? AND u.activo = 1

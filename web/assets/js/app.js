@@ -20,6 +20,8 @@ const modules = {
 };
 const icons = ['◉','⌂','✓','⇄','▣','▦'];
 let currentUser = null, activeModule = null, chart = null, editId = null;
+let registrationStream = null, registrationDetector = null, registrationScanFrame = null, registrationStarting = false;
+let registrationCanvas = null, registrationCanvasContext = null;
 const $ = (selector) => document.querySelector(selector);
 
 async function api(path, options = {}) {
@@ -247,6 +249,141 @@ $('#login-form').addEventListener('submit', async event => {
     await startApp();
   } catch (error) {
     $('#login-message').textContent = error.message;
+  }
+});
+
+function stopRegistrationScanner() {
+  if (registrationScanFrame !== null) {
+    clearTimeout(registrationScanFrame);
+    registrationScanFrame = null;
+  }
+  if (registrationStream) {
+    registrationStream.getTracks().forEach(track => track.stop());
+    registrationStream = null;
+  }
+  $('#registration-video').srcObject = null;
+  $('#registration-scanner').classList.add('hidden');
+}
+
+async function scanRegistrationFrame() {
+  if (!registrationStream) return;
+  const video = $('#registration-video');
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    registrationScanFrame = window.setTimeout(scanRegistrationFrame, 100);
+    return;
+  }
+  try {
+    let qrValue = null;
+    if (registrationDetector) {
+      const codes = await registrationDetector.detect(video);
+      qrValue = codes.find(code => code.format === 'qr_code' && code.rawValue)?.rawValue;
+    } else if (window.jsQR) {
+      if (!registrationCanvas) {
+        registrationCanvas = document.createElement('canvas');
+        registrationCanvasContext = registrationCanvas.getContext('2d', {willReadFrequently:true});
+      }
+      const canvas = registrationCanvas;
+      const scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      if (!registrationCanvasContext) throw new Error('No se pudo procesar la imagen de la cámara.');
+      registrationCanvasContext.drawImage(video, 0, 0, canvas.width, canvas.height);
+      qrValue = window.jsQR(registrationCanvasContext.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)?.data;
+    } else {
+      throw new Error('No se pudo cargar el lector QR. Comprueba tu conexión o escribe el código manualmente.');
+    }
+    if (qrValue) {
+      $('#registration-qr').value = qrValue.trim();
+      $('#scanner-message').textContent = 'QR leído. Comprueba que corresponda al carnet y crea tu cuenta.';
+      stopRegistrationScanner();
+      return;
+    }
+    registrationScanFrame = window.setTimeout(scanRegistrationFrame, 100);
+  } catch (error) {
+    stopRegistrationScanner();
+    $('#scanner-message').textContent = `No se pudo leer el QR: ${error.message || 'intenta de nuevo o escribe el código manualmente.'}`;
+  }
+}
+
+$('#open-registration').addEventListener('click', () => {
+  $('#registration-form').reset();
+  $('#registration-message').textContent = '';
+  $('#scanner-message').textContent = 'Puedes escanearlo con la cámara o escribir el código del carnet.';
+  $('#registration-dialog').showModal();
+});
+
+$('#close-registration').addEventListener('click', () => $('#registration-dialog').close());
+$('#cancel-registration').addEventListener('click', () => $('#registration-dialog').close());
+$('#registration-dialog').addEventListener('close', stopRegistrationScanner);
+
+$('#scan-registration-qr').addEventListener('click', async () => {
+  if (registrationStarting || registrationStream) return;
+  $('#scanner-message').textContent = 'Solicitando permiso para usar la cámara...';
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $('#scanner-message').textContent = 'La cámara requiere abrir el sitio en localhost o HTTPS. También puedes escribir el código manualmente.';
+    return;
+  }
+  if (!('BarcodeDetector' in window) && !window.jsQR) {
+    $('#scanner-message').textContent = 'No se pudo cargar el lector QR. Comprueba tu conexión o escribe el código manualmente.';
+    return;
+  }
+  registrationStarting = true;
+  try {
+    registrationDetector = null;
+    if ('BarcodeDetector' in window) {
+      try {
+        registrationDetector = new window.BarcodeDetector({formats:['qr_code']});
+      } catch (error) {
+        if (!window.jsQR) throw error;
+      }
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    if (!$('#registration-dialog').open) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    registrationStream = stream;
+    $('#registration-video').srcObject = registrationStream;
+    $('#registration-scanner').classList.remove('hidden');
+    $('#scanner-message').textContent = 'Apunta la cámara al QR del carnet y mantenlo visible dentro del recuadro.';
+    registrationScanFrame = window.setTimeout(scanRegistrationFrame, 100);
+  } catch (error) {
+    stopRegistrationScanner();
+    $('#scanner-message').textContent = `No se pudo iniciar la cámara: ${error.message || 'comprueba los permisos o escribe el código manualmente.'}`;
+  } finally {
+    registrationStarting = false;
+  }
+});
+
+$('#registration-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = new FormData(form);
+  $('#registration-message').textContent = '';
+  if (values.get('password') !== values.get('confirm_password')) {
+    $('#registration-message').textContent = 'Las contraseñas no coinciden.';
+    return;
+  }
+  const submit = $('#submit-registration');
+  submit.disabled = true;
+  try {
+    await api('auth/register', {method:'POST',body:JSON.stringify({
+      documento:values.get('documento'),
+      nombres:values.get('nombres'),
+      apellidos:values.get('apellidos'),
+      correo:values.get('correo'),
+      password:values.get('password'),
+      telefono:values.get('telefono'),
+      codigo_qr:values.get('codigo_qr')
+    })});
+    stopRegistrationScanner();
+    $('#registration-dialog').close();
+    form.reset();
+    await startApp();
+  } catch (error) {
+    $('#registration-message').textContent = error.message;
+  } finally {
+    submit.disabled = false;
   }
 });
 

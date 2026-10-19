@@ -33,6 +33,15 @@ actualiza sus indicadores cada 8 segundos.
 en ese modo el navegador no ejecuta PHP y no puede iniciar sesión. Usa la
 dirección local de Apache indicada arriba.
 
+Desde la pantalla de inicio de sesión, un estudiante puede elegir **Registrarme
+como estudiante**, completar sus datos y vincular el QR único de su carnet.
+El sistema crea el usuario y el carnet en una transacción; un QR ya asociado no
+se puede reutilizar, y el rol siempre lo asigna el servidor como estudiante.
+Para escanear con cámara, permite el acceso cuando el navegador lo solicite y
+abre el sitio desde `localhost` o HTTPS; los navegadores bloquean la cámara en
+direcciones HTTP por IP. Si el lector QR externo no carga, se puede escribir el
+código del carnet manualmente.
+
 Cuenta administradora inicial (la contraseña temporal es `password`):
 
 | Rol | Correo |
@@ -103,7 +112,7 @@ Todas las rutas están bajo `/gestion/api/`, reciben/devuelven JSON salvo las
 descargas de reportes y requieren una sesión para operaciones autenticadas.
 El endpoint `/health` sirve para comprobar el servicio.
 
-- `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
+- `POST /auth/login`, `POST /auth/register` (solo estudiantes), `POST /auth/logout`, `GET /auth/me`
 - `POST /auth/recovery`, `POST /auth/reset-password`
 - `GET /dashboard`, `GET /attendance/alerts`, `POST /attendance/mark`
 - `GET /attendance?desde=YYYY-MM-DD&hasta=YYYY-MM-DD` para consultar por rango
