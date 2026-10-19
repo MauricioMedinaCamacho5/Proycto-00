@@ -19,8 +19,9 @@ actualiza sus indicadores cada 8 segundos.
 2. Inicia Apache y MySQL desde el panel de XAMPP.
 3. En phpMyAdmin, importa `database/proyecto01.sql`. El script crea la base
    `proyecto01`, sus tablas y datos de demostración. Si ya habías importado la
-   base, importa en su lugar `database/actualizar_administrador.sql`; este
-   cambio conserva las tablas y los demás datos existentes.
+   base, importa `database/actualizar_administrador.sql` y
+   `database/actualizar_solicitudes_registro.sql`; estas actualizaciones
+   conservan las tablas y los demás datos existentes.
 4. En una terminal, ejecuta `composer install` desde
    `C:\xampp\htdocs\gestion` para habilitar PHPMailer, Dompdf y PhpSpreadsheet.
 5. Si MySQL usa credenciales distintas de las predeterminadas de XAMPP, configura
@@ -33,18 +34,31 @@ actualiza sus indicadores cada 8 segundos.
 en ese modo el navegador no ejecuta PHP y no puede iniciar sesión. Usa la
 dirección local de Apache indicada arriba.
 
-Desde la pantalla de inicio de sesión, un estudiante puede elegir **Registrarme
-como estudiante**, completar sus datos y vincular el código único QR o de barras
-(lineal) de su carnet. El código escaneado puede tener hasta 36 caracteres.
-El sistema crea el usuario y el carnet en una transacción; un código ya asociado
-no se puede reutilizar, y el rol siempre lo asigna el servidor como estudiante.
+La página principal presenta el Servicio Nacional de Aprendizaje SENA y su
+Centro de la Industria, la Empresa y los Servicios. El panel principal y la
+administración de datos requieren una sesión de administrador; instructores,
+estudiantes y personal de portería solo ven los módulos permitidos por su rol.
+
+Desde **Registrar como**, un estudiante puede llenar el documento usando la
+cámara o una foto del código lineal de su carné. La foto se procesa en el
+navegador y no se envía al servidor. El sistema genera un QR digital único para
+la cuenta. Instructores y personal de portería pueden enviar una solicitud; su
+cuenta permanece inactiva hasta que un administrador la apruebe en **Solicitudes
+de registro**. El registro público no permite crear administradores.
+Un estudiante registrado también puede ingresar con **Escanear carné** o
+**Elegir foto**. El acceso por código lineal usa el documento como única
+credencial; cualquier persona con una copia legible puede entrar a esa cuenta.
+Las demás cuentas ingresan con correo y contraseña.
 Para escanear con cámara, permite el acceso cuando el navegador lo solicite y
 abre el sitio desde `localhost` o HTTPS; los navegadores bloquean la cámara en
-direcciones HTTP por IP. El lector reconoce códigos QR y de barras lineales
-(por ejemplo, Code 39 y Code 128). El listado y el panel de administración se
-actualizan automáticamente cada 8 segundos desde la misma base de datos. Si la
-cámara o el lector no están disponibles, se puede escribir el código del carnet
-manualmente.
+direcciones HTTP por IP. El lector reconoce códigos de barras lineales (Code 39,
+Code 93, Code 128, EAN, ITF, UPC y Codabar). Centra el código completo, usa buena
+luz y evita reflejos; puedes escribir el documento manualmente si hace falta.
+Para leer una foto, elige una imagen enfocada y con el código completo visible;
+el lector reconoce el mismo formato de códigos lineales que la cámara.
+El listado y el panel de administración se actualizan automáticamente cada 3
+segundos desde la misma base de datos. Si la cámara o el lector no están
+disponibles, se puede escribir el documento manualmente.
 
 Cuenta administradora inicial (la contraseña temporal es `password`):
 

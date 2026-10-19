@@ -5,7 +5,7 @@ USE proyecto01;
 SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS recuperacion_password, auditoria, notificaciones,
   permisos_temporales, prestamos, movimientos_equipos, equipos, visitantes,
-  accesos, novedades, asistencias, reservas, horarios, mantenimientos,
+  accesos, novedades, asistencias, reservas, horarios, mantenimientos, solicitudes_registro,
   ambientes, fichas_usuarios, fichas, bloqueos, carnets, usuarios, roles;
 SET FOREIGN_KEY_CHECKS = 1;
 
@@ -30,6 +30,18 @@ CREATE TABLE usuarios (
   creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_usuarios_rol FOREIGN KEY (rol_id) REFERENCES roles(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE solicitudes_registro (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  usuario_id BIGINT UNSIGNED NULL,
+  estado ENUM('pendiente','aprobada','rechazada') NOT NULL DEFAULT 'pendiente',
+  solicitada_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revisada_en DATETIME NULL,
+  revisada_por BIGINT UNSIGNED NULL,
+  INDEX idx_solicitudes_estado (estado, solicitada_en),
+  CONSTRAINT fk_solicitudes_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL,
+  CONSTRAINT fk_solicitudes_revisor FOREIGN KEY (revisada_por) REFERENCES usuarios(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE carnets (

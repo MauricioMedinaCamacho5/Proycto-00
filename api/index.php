@@ -55,10 +55,10 @@ function userFromQr(PDO $db, string $qr): ?int
 {
     $stmt = $db->prepare('SELECT c.usuario_id FROM carnets c
         JOIN usuarios u ON u.id = c.usuario_id AND u.activo = 1
-        WHERE c.codigo_qr = ? AND (c.vence_en IS NULL OR c.vence_en >= CURDATE())
+        WHERE (c.codigo_qr = ? OR u.documento = ?) AND (c.vence_en IS NULL OR c.vence_en >= CURDATE())
           AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL)
         LIMIT 1');
-    $stmt->execute([$qr]);
+    $stmt->execute([$qr, $qr]);
     $id = $stmt->fetchColumn();
     return $id ? (int)$id : null;
 }
@@ -297,7 +297,7 @@ try {
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'register' && $method === 'POST') {
         $data = body();
-        foreach (['documento','nombres','apellidos','correo','password','codigo_qr'] as $field) {
+        foreach (['documento','nombres','apellidos','correo','password'] as $field) {
             if (!isset($data[$field]) || !is_string($data[$field])) {
                 respond(['error' => 'Faltan datos obligatorios o tienen un formato incorrecto.'], 422);
             }
@@ -311,13 +311,12 @@ try {
         $email = trim($data['correo']);
         $password = $data['password'];
         $phone = trim($data['telefono'] ?? '');
-        $qr = trim($data['codigo_qr']);
 
         if ($document === '' || strlen($document) > 30 || $firstName === '' || strlen($firstName) > 100 ||
             $lastName === '' || strlen($lastName) > 100 || !filter_var($email, FILTER_VALIDATE_EMAIL) ||
             strlen($email) > 190 || strlen($password) < 8 || strlen($phone) > 30 ||
-            $qr === '' || strlen($qr) > 36 || preg_match('/[\x00-\x1F\x7F]/', $qr)) {
-            respond(['error' => 'Complete los datos correctamente, use una contrasena de al menos 8 caracteres y escanee un QR o codigo de barras valido del carnet.'], 422);
+            preg_match('/[\x00-\x1F\x7F]/', $document)) {
+            respond(['error' => 'Complete los datos correctamente y use una contrasena de al menos 8 caracteres.'], 422);
         }
 
         $db->beginTransaction();
@@ -325,34 +324,92 @@ try {
         $duplicate->execute([$document, $email]);
         if ($duplicate->fetchColumn()) {
             $db->rollBack();
-            respond(['error' => 'Ya existe una cuenta con ese documento o correo.'], 409);
+            respond(['error' => 'Ya existe una cuenta con ese documento o correo. Inicie sesion o use la recuperacion de contrasena.'], 409);
         }
-        $card = $db->prepare('SELECT 1 FROM carnets WHERE codigo_qr = ? LIMIT 1');
-        $card->execute([$qr]);
-        if ($card->fetchColumn()) {
+        $requestedRole = $data['rol'] ?? 'estudiante';
+        if (!in_array($requestedRole, ['estudiante','instructor','portero'], true)) {
             $db->rollBack();
-            respond(['error' => 'Este QR ya esta vinculado a una cuenta. Contacte al administrador si necesita ayuda.'], 409);
+            respond(['error' => 'El registro publico solo admite estudiantes, instructores o porteria.'], 422);
         }
-        $role = $db->prepare("SELECT id FROM roles WHERE nombre = 'estudiante' LIMIT 1");
-        $role->execute();
+        $role = $db->prepare('SELECT id FROM roles WHERE nombre = ? LIMIT 1');
+        $role->execute([$requestedRole]);
         $roleId = $role->fetchColumn();
         if (!$roleId) {
             $db->rollBack();
             respond(['error' => 'No se encontro el rol de estudiante. Contacte al administrador.'], 500);
         }
 
-        $insert = $db->prepare('INSERT INTO usuarios (rol_id,documento,nombres,apellidos,correo,password_hash,telefono) VALUES (?,?,?,?,?,?,?)');
-        $insert->execute([(int)$roleId, $document, $firstName, $lastName, $email, password_hash($password, PASSWORD_DEFAULT), $phone !== '' ? $phone : null]);
+        $student = $requestedRole === 'estudiante';
+        $insert = $db->prepare('INSERT INTO usuarios (rol_id,documento,nombres,apellidos,correo,password_hash,telefono,activo) VALUES (?,?,?,?,?,?,?,?)');
+        $insert->execute([(int)$roleId, $document, $firstName, $lastName, $email, password_hash($password, PASSWORD_DEFAULT), $phone !== '' ? $phone : null, $student ? 1 : 0]);
         $userId = (int)$db->lastInsertId();
-        $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$userId, $qr]);
-        audit($db, $userId, 'registro_publico', 'usuarios', $userId, ['rol' => 'estudiante']);
+        if ($student) {
+            $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$userId, uuid4()]);
+            audit($db, $userId, 'registro_publico', 'usuarios', $userId, ['rol' => $requestedRole]);
+        } else {
+            $request = $db->prepare("INSERT INTO solicitudes_registro (usuario_id) VALUES (?)");
+            $request->execute([$userId]);
+            audit($db, $userId, 'solicitar_registro_personal', 'solicitudes_registro', (int)$db->lastInsertId(), ['rol' => $requestedRole]);
+        }
         $db->commit();
 
+        if (!$student) {
+            respond(['data' => [
+                'pending_approval' => true,
+                'message' => 'Solicitud enviada. Un administrador revisará tus datos antes de activar la cuenta.',
+            ]], 201);
+        }
         session_regenerate_id(true);
         $_SESSION['user_id'] = $userId;
         $_SESSION['last_activity'] = time();
         $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
         respond(['data' => ['user' => currentUser($db), 'message' => 'Cuenta de estudiante creada correctamente.']]);
+    }
+    if ($route === 'registration-requests' && $method === 'GET') {
+        requireRoles($user, ['administrador']);
+        $stmt = $db->query("SELECT s.id, u.documento, u.nombres, u.apellidos, u.correo, r.nombre AS rol, s.solicitada_en
+            FROM solicitudes_registro s
+            JOIN usuarios u ON u.id = s.usuario_id
+            JOIN roles r ON r.id = u.rol_id
+            WHERE s.estado = 'pendiente'
+            ORDER BY s.solicitada_en, s.id");
+        respond(['data' => $stmt->fetchAll()]);
+    }
+    if ($route === 'registration-requests' && isset($parts[1], $parts[2]) &&
+        ctype_digit($parts[1]) && in_array($parts[2], ['approve','reject'], true) && $method === 'POST') {
+        $actor = requireRoles($user, ['administrador']);
+        $requestId = (int)$parts[1];
+        $db->beginTransaction();
+        $stmt = $db->prepare("SELECT s.usuario_id, u.rol_id, r.nombre AS rol
+            FROM solicitudes_registro s
+            JOIN usuarios u ON u.id = s.usuario_id
+            JOIN roles r ON r.id = u.rol_id
+            WHERE s.id = ? AND s.estado = 'pendiente' AND u.activo = 0
+              AND r.nombre IN ('instructor','portero')
+            FOR UPDATE");
+        $stmt->execute([$requestId]);
+        $request = $stmt->fetch();
+        if (!$request) {
+            $db->rollBack();
+            respond(['error' => 'La solicitud no existe o ya fue revisada.'], 404);
+        }
+
+        if ($parts[2] === 'approve') {
+            $db->prepare('UPDATE usuarios SET activo = 1 WHERE id = ?')->execute([$request['usuario_id']]);
+            $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$request['usuario_id'], uuid4()]);
+            $db->prepare("UPDATE solicitudes_registro SET estado = 'aprobada', revisada_en = NOW(), revisada_por = ? WHERE id = ?")
+                ->execute([$actor['id'], $requestId]);
+            audit($db, (int)$actor['id'], 'aprobar_registro_personal', 'solicitudes_registro', $requestId, ['rol' => $request['rol']]);
+            $message = 'Solicitud aprobada. La cuenta ya puede iniciar sesión.';
+        } else {
+            $db->prepare("UPDATE solicitudes_registro SET estado = 'rechazada', revisada_en = NOW(), revisada_por = ?, usuario_id = NULL WHERE id = ?")
+                ->execute([$actor['id'], $requestId]);
+            $db->prepare('DELETE FROM usuarios WHERE id = ?')->execute([$request['usuario_id']]);
+            audit($db, (int)$actor['id'], 'rechazar_registro_personal', 'solicitudes_registro', $requestId, ['rol' => $request['rol']]);
+            $message = 'Solicitud rechazada y cuenta pendiente eliminada; la persona puede volver a solicitar el acceso.';
+        }
+        $db->commit();
+        respond(['data' => ['message' => $message]]);
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'login' && $method === 'POST') {
         $data = body();
@@ -368,6 +425,31 @@ try {
         $_SESSION['last_activity'] = time();
         $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$record['id']]);
         audit($db, (int)$record['id'], 'inicio_sesion', 'usuarios', (int)$record['id']);
+        respond(['data' => currentUser($db)]);
+    }
+    if ($route === 'auth' && ($parts[1] ?? '') === 'barcode-login' && $method === 'POST') {
+        $data = body();
+        $document = $data['documento'] ?? null;
+        if (!is_string($document) || trim($document) === '' || strlen(trim($document)) > 30) {
+            respond(['error' => 'El código del documento no es válido.'], 422);
+        }
+        $stmt = $db->prepare("SELECT u.id FROM usuarios u
+            JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
+            JOIN carnets c ON c.usuario_id = u.id
+            WHERE u.documento = ? AND u.activo = 1
+              AND (c.vence_en IS NULL OR c.vence_en >= CURDATE())
+              AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL)
+            LIMIT 1");
+        $stmt->execute([trim($document)]);
+        $userId = $stmt->fetchColumn();
+        if (!$userId) {
+            respond(['error' => 'No se encontró un estudiante activo con ese código.'], 401);
+        }
+        session_regenerate_id(true);
+        $_SESSION['user_id'] = (int)$userId;
+        $_SESSION['last_activity'] = time();
+        $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
+        audit($db, (int)$userId, 'inicio_sesion_codigo_barras', 'usuarios', (int)$userId);
         respond(['data' => currentUser($db)]);
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'logout' && $method === 'POST') {

@@ -1,5 +1,6 @@
 const API = 'api';
 const modules = {
+  'registration-requests': {label:'Solicitudes de registro', icon:'✉', roles:['administrador'], fields:[]},
   users: {label:'Usuarios', icon:'♙', roles:['administrador'], fields:[['rol_id','Rol (1 admin, 2 instructor, 3 estudiante, 4 portero)','number'],['documento','Documento'],['nombres','Nombres'],['apellidos','Apellidos'],['correo','Correo','email'],['password','Contraseña (mínimo 8 caracteres)','password'],['telefono','Teléfono']]},
   environments: {label:'Ambientes', icon:'⌂', roles:['administrador'], fields:[['codigo','Código'],['nombre','Nombre'],['ubicacion','Ubicación'],['capacidad','Capacidad','number'],['estado','Estado (disponible/ocupado/mantenimiento)'],['descripcion','Descripción']]},
   fichas: {label:'Fichas', icon:'▤', roles:['administrador','instructor'], fields:[['codigo','Código'],['nombre','Nombre'],['fecha_inicio','Fecha inicio','date'],['fecha_fin','Fecha fin','date'],['estado','Estado (activa/finalizada/suspendida)']]},
@@ -21,6 +22,7 @@ const modules = {
 const icons = ['◉','⌂','✓','⇄','▣','▦'];
 let currentUser = null, activeModule = null, chart = null, editId = null;
 let registrationControls = null, registrationStarting = false, registrationScanCompleted = false, tableRefreshInProgress = false;
+let loginScannerControls = null, loginScannerStarting = false, loginScanCompleted = false;
 const $ = (selector) => document.querySelector(selector);
 
 function refreshActiveTable() {
@@ -73,24 +75,29 @@ async function startApp() {
   try {
     currentUser = await api('auth/me');
   } catch (error) {
-    $('#login-screen').classList.remove('hidden');
+    $('#landing-screen').classList.remove('hidden');
+    $('#login-screen').classList.add('hidden');
     $('#app-shell').classList.add('hidden');
     if (error.status !== 401) $('#login-message').textContent = error.message;
     return;
   }
+  stopLoginScanner();
+  $('#landing-screen').classList.add('hidden');
   $('#login-screen').classList.add('hidden');
   $('#app-shell').classList.remove('hidden');
   $('#user-summary').innerHTML = `<div class="user-name">${escapeHtml(currentUser.nombres)} ${escapeHtml(currentUser.apellidos)}</div><div class="user-role">${escapeHtml(currentUser.rol)}</div>`;
   renderNavigation();
   try {
-    if (currentUser.rol === 'estudiante') await showModule('schedules');
-    else await showDashboard();
+    if (currentUser.rol === 'administrador') await showDashboard();
+    else if (currentUser.rol === 'estudiante') await showModule('schedules');
+    else if (currentUser.rol === 'instructor') await showModule('fichas');
+    else await showModule('accesses');
   } catch (error) { showError(error); }
 }
 
 function renderNavigation() {
   const entries = [];
-  if (['administrador','instructor','portero'].includes(currentUser.rol)) entries.push(['dashboard','Resumen','◈']);
+  if (currentUser.rol === 'administrador') entries.push(['dashboard','Resumen','◈']);
   Object.entries(modules).forEach(([key, item]) => {
     if (item.roles.includes(currentUser.rol)) entries.push([key,item.label,item.icon]);
   });
@@ -123,7 +130,7 @@ async function showDashboard() {
   if (!window.dashboardTimer) window.dashboardTimer = setInterval(() => {
     if (activeModule) refreshActiveTable();
     else refreshDashboard().catch(showError);
-  }, 8000);
+  }, 3000);
 }
 
 async function refreshDashboard() {
@@ -161,9 +168,12 @@ async function showModule(key) {
   $('#page-title').textContent = modules[key].label;
   $('#page-kicker').textContent = 'GESTIÓN DE MÓDULOS';
   $('#table-title').textContent = modules[key].label;
-  $('#table-description').textContent = 'Consulta y administra los registros del sistema.';
-  $('#add-record').classList.toggle('hidden', currentUser.rol === 'estudiante' || key === 'notifications' && currentUser.rol === 'estudiante' || key === 'fichas' && currentUser.rol === 'instructor');
-  $('#export-report').classList.toggle('hidden', currentUser.rol === 'estudiante' && !['schedules','attendance','notifications'].includes(key));
+  $('#table-description').textContent = key === 'registration-requests'
+    ? 'Revisa las solicitudes de instructores y portería antes de activar sus cuentas.'
+    : 'Consulta y administra los registros del sistema.';
+  $('#add-record').classList.toggle('hidden', key === 'registration-requests' || currentUser.rol === 'estudiante' || key === 'notifications' && currentUser.rol === 'estudiante' || key === 'fichas' && currentUser.rol === 'instructor');
+  $('#export-report').classList.toggle('hidden', key === 'registration-requests' || currentUser.rol === 'estudiante' && !['schedules','attendance','notifications'].includes(key));
+  $('#report-format').classList.toggle('hidden', key === 'registration-requests');
   setActiveNav(key);
   await loadTable();
 }
@@ -175,21 +185,29 @@ async function loadTable() {
   const rows = Array.isArray(data) ? data : [];
   if (!rows.length) {
     $('#table-head').innerHTML = '';
-    $('#table-body').innerHTML = '<tr><td class="empty-row">No hay registros disponibles.</td></tr>';
+    const emptyMessage = module === 'registration-requests'
+      ? 'No hay solicitudes pendientes de revisión.'
+      : 'No hay registros disponibles.';
+    $('#table-body').innerHTML = `<tr><td class="empty-row">${emptyMessage}</td></tr>`;
     return;
   }
   const columns = Object.keys(rows[0]);
-  const allowDelete = currentUser.rol === 'administrador' && activeModule !== 'blocks';
+  const allowDelete = currentUser.rol === 'administrador' && !['blocks','registration-requests'].includes(activeModule);
   const allowEdit = modules[activeModule].roles.includes(currentUser.rol) && currentUser.rol !== 'estudiante' && !(activeModule === 'fichas' && currentUser.rol === 'instructor');
-  $('#table-head').innerHTML = `<tr>${columns.map(col => `<th>${escapeHtml(col.replaceAll('_',' '))}</th>`).join('')}${allowDelete || allowEdit ? '<th>Acciones</th>' : ''}</tr>`;
   const canManage = currentUser.rol === 'administrador';
+  const hasActions = allowDelete || allowEdit || activeModule === 'registration-requests' && canManage;
+  $('#table-head').innerHTML = `<tr>${columns.map(col => `<th>${escapeHtml(col.replaceAll('_',' '))}</th>`).join('')}${hasActions ? '<th>Acciones</th>' : ''}</tr>`;
   $('#table-body').innerHTML = rows.map(row => {
     const actions = [];
     if (allowEdit) actions.push(`<button class="row-action" data-edit="${Number(row.id)}">Editar</button>`);
+    if (activeModule === 'registration-requests' && canManage) {
+      actions.push(`<button class="row-action request-approve" data-approve="${Number(row.id)}">Aprobar</button>`);
+      actions.push(`<button class="row-action request-reject" data-reject="${Number(row.id)}">Rechazar</button>`);
+    }
     if (activeModule === 'blocks' && canManage && !row.desbloqueado_en) actions.push(`<button class="row-action" data-unblock="${Number(row.id)}">Desbloquear</button>`);
     if (activeModule === 'loans' && canManage && row.estado === 'activo') actions.push(`<button class="row-action" data-return="${Number(row.id)}">Marcar devolución</button>`);
     if (allowDelete) actions.push(`<button class="row-action" data-delete="${Number(row.id)}">Eliminar</button>`);
-    return `<tr>${columns.map(col => `<td title="${escapeHtml(row[col])}">${escapeHtml(row[col])}</td>`).join('')}${allowDelete || allowEdit ? `<td>${actions.join(' · ')}</td>` : ''}</tr>`;
+    return `<tr>${columns.map(col => `<td title="${escapeHtml(row[col])}">${escapeHtml(row[col])}</td>`).join('')}${hasActions ? `<td>${actions.join(' · ')}</td>` : ''}</tr>`;
   }).join('');
   $('#table-body').querySelectorAll('[data-edit]').forEach(button => {
     const row = rows.find(record => Number(record.id) === Number(button.dataset.edit));
@@ -198,6 +216,8 @@ async function loadTable() {
   $('#table-body').querySelectorAll('[data-delete]').forEach(button => button.addEventListener('click', () => deleteRecord(Number(button.dataset.delete))));
   $('#table-body').querySelectorAll('[data-unblock]').forEach(button => button.addEventListener('click', () => unblockUser(Number(button.dataset.unblock))));
   $('#table-body').querySelectorAll('[data-return]').forEach(button => button.addEventListener('click', () => returnLoan(Number(button.dataset.return))));
+  $('#table-body').querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', () => reviewRegistration(Number(button.dataset.approve), 'approve')));
+  $('#table-body').querySelectorAll('[data-reject]').forEach(button => button.addEventListener('click', () => reviewRegistration(Number(button.dataset.reject), 'reject')));
 }
 
 function fieldInput([name,label,type='text'], value='') {
@@ -219,6 +239,17 @@ function openForm(record = null) {
     return editId && name === 'password' ? input.replace(' required', '') : input;
   }).join('');
   $('#record-dialog').showModal();
+}
+
+function reviewRegistration(id, decision) {
+  const action = decision === 'approve' ? 'aprobar' : 'rechazar y eliminar';
+  if (!window.confirm(`¿Seguro que desea ${action} esta solicitud?`)) return;
+  api(`registration-requests/${id}/${decision}`, {method:'POST',body:'{}'})
+    .then(async result => {
+      await loadTable();
+      $('#table-message').textContent = result.message;
+    })
+    .catch(showError);
 }
 
 async function deleteRecord(id) {
@@ -260,6 +291,146 @@ $('#login-form').addEventListener('submit', async event => {
   }
 });
 
+$('#landing-admin-login').addEventListener('click', showLogin);
+$('#landing-admin-open').addEventListener('click', showLogin);
+$('#landing-student-login').addEventListener('click', showLogin);
+$('#login-home').addEventListener('click', showLanding);
+$('#landing-student-register').addEventListener('click', () => openRegistration('estudiante'));
+$('#landing-register').addEventListener('click', () => openRegistration('estudiante'));
+$('#landing-staff-register').addEventListener('click', () => openRegistration('instructor'));
+
+function showLanding() {
+  stopLoginScanner();
+  $('#login-screen').classList.add('hidden');
+  $('#landing-screen').classList.remove('hidden');
+}
+
+function showLogin() {
+  $('#landing-screen').classList.add('hidden');
+  $('#login-screen').classList.remove('hidden');
+}
+
+function openRegistration(role = 'estudiante') {
+  $('#registration-form').reset();
+  $('#registration-role').value = role;
+  updateRegistrationRole();
+  $('#registration-message').textContent = '';
+  $('#landing-message').textContent = '';
+  $('#scanner-message').textContent = 'Usa la cámara o una foto para leer el número del documento impreso en el código de barras.';
+  $('#registration-dialog').showModal();
+}
+
+function updateRegistrationRole() {
+  const student = $('#registration-role').value === 'estudiante';
+  if (!student) stopRegistrationScanner();
+  $('#registration-title').textContent = student ? 'Registrar como estudiante' : 'Solicitar cuenta de personal';
+  $('#registration-intro').textContent = student
+    ? 'Completa tus datos y escanea el código lineal de tu carné o elige una foto. El sistema genera tu QR digital y activa tu cuenta de estudiante.'
+    : 'Completa tus datos para enviar una solicitud. Un administrador debe aprobarla antes de que puedas ingresar.';
+  $('#registration-document-field').classList.toggle('hidden', !student);
+  $('#registration-document').required = student;
+  $('#registration-staff-document-field').classList.toggle('hidden', student);
+  $('#registration-staff-document').required = !student;
+  document.querySelectorAll('.student-registration-only').forEach(element => {
+    element.classList.toggle('hidden', !student || element.id === 'registration-scanner');
+  });
+  $('#submit-registration').textContent = student ? 'Crear cuenta' : 'Enviar solicitud';
+}
+
+$('#registration-role').addEventListener('change', updateRegistrationRole);
+
+function stopLoginScanner(controls = loginScannerControls) {
+  controls?.stop();
+  loginScannerControls = null;
+  $('#login-video').pause();
+  $('#login-video').srcObject = null;
+  $('#login-scanner').classList.add('hidden');
+}
+
+async function loginWithBarcode(value, controls = loginScannerControls) {
+  const documentNumber = value.trim();
+  if (!documentNumber) return;
+  loginScanCompleted = true;
+  stopLoginScanner(controls);
+  $('#login-scan-message').textContent = 'Verificando el código...';
+  try {
+    await api('auth/barcode-login', {method:'POST',body:JSON.stringify({documento:documentNumber})});
+    await startApp();
+  } catch (error) {
+    $('#login-scan-message').textContent = error.message;
+  }
+}
+
+$('#scan-login-barcode').addEventListener('click', async () => {
+  if (loginScannerStarting || loginScannerControls) return;
+  $('#login-scan-message').textContent = 'Preparando cámara para escanear tu carné...';
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $('#login-scan-message').textContent = 'La cámara requiere abrir el sitio en localhost o HTTPS. También puedes elegir una foto.';
+    return;
+  }
+  if (!window.ZXingBrowser?.BrowserMultiFormatReader) {
+    $('#login-scan-message').textContent = 'No se pudo cargar el lector. Comprueba tu conexión o elige una foto.';
+    return;
+  }
+  loginScannerStarting = true;
+  loginScanCompleted = false;
+  try {
+    const controls = await createBarcodeReader().decodeFromConstraints(
+      {video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false},
+      $('#login-video'),
+      (result, error, scanControls) => {
+        if (!result || loginScanCompleted) return;
+        loginWithBarcode(result.getText(), scanControls);
+      }
+    );
+    if (loginScanCompleted) {
+      controls.stop();
+      return;
+    }
+    loginScannerControls = controls;
+    $('#login-scanner').classList.remove('hidden');
+    $('#login-scan-message').textContent = 'Centra el código de barras completo en la cámara, con buena luz y sin reflejos.';
+  } catch (error) {
+    stopLoginScanner();
+    $('#login-scan-message').textContent = `No se pudo escanear: ${error.message || 'comprueba los permisos de cámara o elige una foto.'}`;
+  } finally {
+    loginScannerStarting = false;
+  }
+});
+
+$('#choose-login-photo').addEventListener('click', () => $('#login-photo').click());
+
+$('#login-photo').addEventListener('change', async event => {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!window.ZXingBrowser?.BrowserMultiFormatReader) {
+    $('#login-scan-message').textContent = 'No se pudo cargar el lector. Comprueba tu conexión o escribe correo y contraseña.';
+    input.value = '';
+    return;
+  }
+
+  loginScanCompleted = false;
+  $('#login-scan-message').textContent = 'Leyendo el código de barras de la foto...';
+  let imageUrl;
+  try {
+    imageUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.src = imageUrl;
+    await image.decode();
+    const result = await createBarcodeReader().decodeFromImageElement(image);
+    await loginWithBarcode(result.getText());
+  } catch (error) {
+    const message = error?.name === 'NotFoundException'
+      ? 'No se encontró un código legible. Elige una foto nítida con el código completo.'
+      : `No se pudo leer la foto: ${error.message || 'prueba con otra imagen.'}`;
+    $('#login-scan-message').textContent = message;
+  } finally {
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    input.value = '';
+  }
+});
+
 function stopRegistrationScanner(controls = registrationControls) {
   controls?.stop();
   registrationControls = null;
@@ -268,20 +439,76 @@ function stopRegistrationScanner(controls = registrationControls) {
   $('#registration-scanner').classList.add('hidden');
 }
 
-$('#open-registration').addEventListener('click', () => {
-  $('#registration-form').reset();
-  $('#registration-message').textContent = '';
-  $('#scanner-message').textContent = 'Puedes escanear el QR o código de barras lineal con la cámara, o escribir el código manualmente.';
-  $('#registration-dialog').showModal();
-});
+function createBarcodeReader() {
+  const reader = new window.ZXingBrowser.BrowserMultiFormatReader();
+  reader.possibleFormats = [
+    window.ZXingBrowser.BarcodeFormat.CODE_128,
+    window.ZXingBrowser.BarcodeFormat.CODE_39,
+    window.ZXingBrowser.BarcodeFormat.CODE_93,
+    window.ZXingBrowser.BarcodeFormat.CODABAR,
+    window.ZXingBrowser.BarcodeFormat.EAN_8,
+    window.ZXingBrowser.BarcodeFormat.EAN_13,
+    window.ZXingBrowser.BarcodeFormat.ITF,
+    window.ZXingBrowser.BarcodeFormat.UPC_A,
+    window.ZXingBrowser.BarcodeFormat.UPC_E
+  ];
+  return reader;
+}
+
+function applyRegistrationBarcode(value, controls = registrationControls) {
+  const scannedValue = value.trim();
+  if (!scannedValue) return;
+  registrationScanCompleted = true;
+  if (scannedValue.length > 30) {
+    $('#scanner-message').textContent = 'El documento leído supera los 30 caracteres permitidos. Escribe el número manualmente.';
+    stopRegistrationScanner(controls);
+    return;
+  }
+  $('#registration-document').value = scannedValue;
+  $('#scanner-message').textContent = 'Documento leído. Comprueba que el número sea correcto y crea tu cuenta.';
+  stopRegistrationScanner(controls);
+}
 
 $('#close-registration').addEventListener('click', () => $('#registration-dialog').close());
 $('#cancel-registration').addEventListener('click', () => $('#registration-dialog').close());
 $('#registration-dialog').addEventListener('close', () => stopRegistrationScanner());
 
+$('#choose-registration-photo').addEventListener('click', () => $('#registration-photo').click());
+
+$('#registration-photo').addEventListener('change', async event => {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!window.ZXingBrowser?.BrowserMultiFormatReader) {
+    $('#scanner-message').textContent = 'No se pudo cargar el lector. Comprueba tu conexión o escribe el documento manualmente.';
+    input.value = '';
+    return;
+  }
+
+  stopRegistrationScanner();
+  $('#scanner-message').textContent = 'Leyendo el código de barras de la foto...';
+  let imageUrl;
+  try {
+    imageUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.src = imageUrl;
+    await image.decode();
+    const result = await createBarcodeReader().decodeFromImageElement(image);
+    applyRegistrationBarcode(result.getText());
+  } catch (error) {
+    const message = error?.name === 'NotFoundException'
+      ? 'No se encontró un código legible en la foto. Elige una imagen nítida, bien iluminada y con el código completo.'
+      : `No se pudo leer la foto: ${error.message || 'prueba con otra imagen o escribe el documento manualmente.'}`;
+    $('#scanner-message').textContent = message;
+  } finally {
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    input.value = '';
+  }
+});
+
 $('#scan-registration-qr').addEventListener('click', async () => {
   if (registrationStarting || registrationControls) return;
-  $('#scanner-message').textContent = 'Preparando cámara para QR y códigos de barras...';
+  $('#scanner-message').textContent = 'Preparando cámara para leer el código de barras...';
   if (!navigator.mediaDevices?.getUserMedia) {
     $('#scanner-message').textContent = 'La cámara requiere abrir el sitio en localhost o HTTPS. También puedes escribir el código manualmente.';
     return;
@@ -292,24 +519,14 @@ $('#scan-registration-qr').addEventListener('click', async () => {
   }
   registrationStarting = true;
   try {
-    const reader = new window.ZXingBrowser.BrowserMultiFormatReader();
+    const reader = createBarcodeReader();
     registrationScanCompleted = false;
     const controls = await reader.decodeFromConstraints(
-      {video:{facingMode:{ideal:'environment'}},audio:false},
+      {video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false},
       $('#registration-video'),
       (result, error, controls) => {
         if (!result || !$('#registration-dialog').open) return;
-        const scannedValue = result.getText().trim();
-        if (!scannedValue) return;
-        registrationScanCompleted = true;
-        if (scannedValue.length > 36) {
-          $('#scanner-message').textContent = 'El código leído supera los 36 caracteres permitidos. Escribe el identificador corto impreso en el carnet.';
-          stopRegistrationScanner(controls);
-          return;
-        }
-        $('#registration-qr').value = scannedValue;
-        $('#scanner-message').textContent = 'Código leído. Comprueba que corresponda a tu carnet y crea tu cuenta.';
-        stopRegistrationScanner(controls);
+        applyRegistrationBarcode(result.getText(), controls);
       }
     );
     if (!$('#registration-dialog').open || registrationScanCompleted) {
@@ -318,7 +535,7 @@ $('#scan-registration-qr').addEventListener('click', async () => {
     }
     registrationControls = controls;
     $('#registration-scanner').classList.remove('hidden');
-    $('#scanner-message').textContent = 'Apunta la cámara al QR o al código de barras lineal del carné.';
+    $('#scanner-message').textContent = 'Centra el código de barras completo en la cámara, con buena luz y sin reflejos.';
   } catch (error) {
     stopRegistrationScanner();
     $('#scanner-message').textContent = `No se pudo escanear: ${error.message || 'comprueba los permisos de cámara o escribe el código manualmente.'}`;
@@ -339,19 +556,25 @@ $('#registration-form').addEventListener('submit', async event => {
   const submit = $('#submit-registration');
   submit.disabled = true;
   try {
-    await api('auth/register', {method:'POST',body:JSON.stringify({
-      documento:values.get('documento'),
+    const result = await api('auth/register', {method:'POST',body:JSON.stringify({
+      rol:values.get('rol'),
+      documento:values.get('rol') === 'estudiante' ? values.get('documento') : values.get('personal_documento'),
       nombres:values.get('nombres'),
       apellidos:values.get('apellidos'),
       correo:values.get('correo'),
       password:values.get('password'),
-      telefono:values.get('telefono'),
-      codigo_qr:values.get('codigo_qr')
+      telefono:values.get('telefono')
     })});
     stopRegistrationScanner();
     $('#registration-dialog').close();
     form.reset();
-    await startApp();
+    if (result.pending_approval) {
+      $('#landing-screen').classList.remove('hidden');
+      $('#login-screen').classList.add('hidden');
+      $('#landing-message').textContent = result.message;
+    } else {
+      await startApp();
+    }
   } catch (error) {
     $('#registration-message').textContent = error.message;
   } finally {
@@ -370,10 +593,12 @@ async function logout() {
     }
     currentUser = null;
     activeModule = null;
+    stopLoginScanner();
     $('#app-shell').classList.add('hidden');
-    $('#login-screen').classList.remove('hidden');
+    $('#login-screen').classList.add('hidden');
+    $('#landing-screen').classList.remove('hidden');
     $('#login-form').reset();
-    $('#login-message').textContent = 'Has cerrado sesión correctamente.';
+    $('#landing-message').textContent = 'Has cerrado sesión correctamente.';
   } catch (error) {
     showError(error);
   } finally {
