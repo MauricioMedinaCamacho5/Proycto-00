@@ -18,8 +18,11 @@ actualiza sus indicadores cada 8 segundos.
 1. Copia el proyecto a `C:\xampp\htdocs\gestion`.
 2. Inicia Apache y MySQL desde el panel de XAMPP.
 3. En phpMyAdmin, importa `database/proyecto01.sql`. El script crea la base
-   `proyecto01`, sus tablas y datos de demostración. Si ya habías importado la
-   base, importa `database/actualizar_administrador.sql` y
+   `proyecto01`, sus tablas y datos de demostración. **Esta importación elimina
+   y vuelve a crear las tablas**: úsala solo para una instalación nueva, nunca
+   para trasladar una base que ya contiene tus datos. Para actualizar una
+   instalación existente, importa únicamente
+   `database/actualizar_administrador.sql` y
    `database/actualizar_solicitudes_registro.sql`; estas actualizaciones
    conservan las tablas y los demás datos existentes.
 4. En una terminal, ejecuta `composer install` desde
@@ -33,6 +36,56 @@ actualiza sus indicadores cada 8 segundos.
 **No abras `index.html` directamente** (la dirección empieza por `file:///`):
 en ese modo el navegador no ejecuta PHP y no puede iniciar sesión. Usa la
 dirección local de Apache indicada arriba.
+
+### Trasladar todos los datos a otro computador
+
+El código del proyecto y la base MySQL son cosas separadas: copiar el proyecto
+o descargarlo desde Git no copia los registros de MySQL. Para conservar usuarios,
+asistencias y los demás datos, traslada un respaldo `.sql`:
+
+1. En el computador anterior, inicia MySQL en XAMPP y ejecuta
+   `backups\respaldo_diario.bat`. El archivo completo se crea en la carpeta
+   `backups` del proyecto. También puedes programar ese mismo archivo para
+   generar copias diarias. Mantén una copia del `.sql` fuera del computador.
+2. Copia el proyecto al nuevo computador (por ejemplo, a
+   `C:\xampp\htdocs\gestion`) y copia allí el archivo `.sql` de respaldo. No
+   subas respaldos con datos personales al repositorio Git; están excluidos por
+   `.gitignore`.
+3. Instala XAMPP y Composer en el nuevo computador, inicia Apache y MySQL, y
+   ejecuta `composer install` dentro de la carpeta del proyecto.
+4. Desde una terminal abierta en la carpeta del proyecto, ejecuta
+   `backups\restaurar_respaldo.bat "backups\NOMBRE_DEL_RESPALDO.sql"` y confirma
+   con `S`. La restauración reemplaza la base `proyecto01` del computador nuevo
+   por los datos del respaldo. No la ejecutes contra la base que quieras
+   conservar.
+5. Abre `http://localhost/gestion/`. Comprueba también
+   `http://localhost/gestion/api/health`; debe responder JSON con
+   `"status":"ok"`.
+
+Si prefieres hacerlo desde phpMyAdmin: en el computador anterior abre
+`http://localhost/phpmyadmin`, selecciona `proyecto01` en el menú izquierdo,
+pulsa **Exportar**, deja el método **Rápido** y el formato **SQL**, y pulsa
+**Exportar** para guardar el archivo. En el computador nuevo, abre phpMyAdmin,
+crea una base llamada `proyecto01` con cotejamiento `utf8mb4_unicode_ci`,
+selecciónala, entra en **Importar**, elige el archivo guardado y pulsa
+**Importar** o **Continuar**. No importes allí `database/proyecto01.sql`: ese
+archivo es para iniciar una base nueva con datos de demostración y borra las
+tablas existentes.
+
+Los scripts buscan MySQL dentro de la instalación XAMPP que contiene `htdocs`
+o en `C:\xampp`. Si tu instalación está en otra ruta, define la variable de
+entorno `XAMPP_DIR` con la carpeta de XAMPP. Por defecto usan `127.0.0.1`, el
+usuario `root` y contraseña vacía. Si tu MySQL tiene contraseña, no la escribas
+en estos scripts: configura un archivo de opciones de cliente protegido y
+define la variable de entorno `MYSQL_OPTION_FILE` con su ruta. Puedes definir
+también `MYSQL_HOST`, `MYSQL_USER` y `DB_NAME` si usas otros valores.
+
+Si aparece **HTTP 405**, no significa que falte importar MySQL. Inicia Apache y
+MySQL en XAMPP, habilita `mod_rewrite` y `AllowOverride All`, reinicia Apache y
+abre `/gestion/api/health`. Si esa dirección devuelve `"status":"ok"`, API y
+base de datos están conectadas; si devuelve un error JSON, revisa las
+credenciales `DB_HOST`, `DB_NAME`, `DB_USER` y `DB_PASSWORD` y que la base haya
+sido restaurada.
 
 La página principal presenta el Servicio Nacional de Aprendizaje SENA y su
 Centro de la Industria, la Empresa y los Servicios. El panel principal y la

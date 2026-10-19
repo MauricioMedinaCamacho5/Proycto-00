@@ -57,7 +57,10 @@ async function api(path, options = {}) {
     throw new Error(`El servidor devolvió una respuesta que no es JSON (HTTP ${response.status}). Comprueba que Apache/PHP funcione y que la URL empiece por http://localhost/gestion/.`);
   }
   if (!result || typeof result !== 'object') {
-    throw new Error(`El servidor respondió vacío (HTTP ${response.status}). Comprueba Apache/PHP y que la base de datos esté importada en phpMyAdmin.`);
+    if (response.status === 405) {
+      throw new Error('Apache rechazó la solicitud (HTTP 405). No es un error de importación de MySQL. Inicia Apache, habilita mod_rewrite y AllowOverride All en XAMPP, y comprueba http://localhost/gestion/api/health.');
+    }
+    throw new Error(`El servidor respondió vacío (HTTP ${response.status}). Comprueba que Apache ejecute PHP y que la API esté disponible en http://localhost/gestion/api/health.`);
   }
   if (!response.ok) {
     const error = new Error(result.error || `Error HTTP ${response.status}`);
