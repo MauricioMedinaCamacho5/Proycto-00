@@ -20,3 +20,14 @@
 .sidebar nav::-webkit-scrollbar{width:4px;height:4px}
 .sidebar nav::-webkit-scrollbar-thumb{background:rgba(194,221,231,.24);border-radius:999px}
 @media(max-width:650px){.sidebar{gap:8px}.sidebar nav{gap:7px;min-width:0;padding:2px 0}.nav-link{min-height:40px;flex:0 0 auto;padding:4px 5px;border-radius:999px}.nav-icon{flex-basis:30px;width:30px;height:30px}.nav-link:hover{transform:translateY(-2px)}}
+.sidebar{position:sticky;top:0;inset:auto;width:100%;height:auto;padding:12px clamp(14px,3vw,38px);display:grid;grid-template-columns:minmax(160px,auto) minmax(0,1fr);grid-template-areas:"brand account" "navigation navigation";align-items:center;gap:8px 20px;background:linear-gradient(165deg,#12344a 0%,#0e2b40 58%,#0b2436 100%);box-shadow:0 8px 24px rgba(7,28,42,.14)}
+.brand{grid-area:brand;padding:0;white-space:nowrap}
+.sidebar-label{display:none}
+.sidebar nav{grid-area:navigation;display:flex;min-width:0;overflow-x:auto;gap:7px;padding:3px 2px 6px;scrollbar-width:thin;scrollbar-color:rgba(194,221,231,.3) transparent}
+.sidebar-bottom{grid-area:account;display:flex;align-items:center;justify-self:end;gap:16px;margin:0;padding:0;border:0}
+.logout-button{width:auto;align-items:center;gap:8px;margin:0;padding:8px 13px;border:1px solid rgba(194,221,231,.2);border-radius:999px;background:rgba(205,230,239,.08);color:#fff;white-space:nowrap}
+.logout-button:hover{background:rgba(205,230,239,.15)}
+.main-area{margin-left:0;min-height:calc(100vh - 100px)}
+.logout-top-button{display:none}
+@media(max-width:950px){.sidebar{width:100%}.main-area{margin-left:0;padding:27px 22px}.sidebar-bottom{gap:10px}}
+@media(max-width:650px){.sidebar{position:sticky;inset:auto;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand account" "navigation navigation";gap:8px;padding:9px 12px}.brand{min-width:0}.sidebar-bottom{padding:0}.sidebar-bottom #user-summary{display:none}.logout-button{padding:7px 10px;font-size:11px}.sidebar nav{display:flex;min-width:0;overflow-x:auto;gap:7px;padding:2px 1px 5px}.nav-link{min-height:40px;flex:0 0 auto;padding:4px 10px}.nav-label{display:inline}.nav-icon{flex-basis:28px;width:28px;height:28px}.nav-link:hover{transform:translateY(-2px)}.main-area{margin:0;padding:22px 14px}.topbar-actions{align-items:flex-end;flex-direction:column;gap:8px}.topbar .live-status{max-width:none}}
