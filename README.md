@@ -1,4 +1,4 @@
-# Proyecto01 — Gestión Institucional
+# Proycto-00 — Gestión Institucional
 
 Aplicación institucional (proyecto de prueba y práctica) para XAMPP con una API PHP/PDO compartida por el sitio web y
 la aplicación Android. Los datos persisten en MySQL/MariaDB; el panel web
