@@ -3,7 +3,7 @@ CREATE DATABASE IF NOT EXISTS proyecto01
 USE proyecto01;
 
 SET FOREIGN_KEY_CHECKS = 0;
-DROP TABLE IF EXISTS recuperacion_password, auditoria, notificaciones,
+DROP TABLE IF EXISTS verificaciones_correo, recuperacion_password, auditoria, notificaciones,
   permisos_temporales, prestamos, movimientos_equipos, equipos, visitantes,
   accesos, novedades, asistencias, reservas, horarios, mantenimientos, solicitudes_registro,
   ambientes, fichas_usuarios, fichas, bloqueos, carnets, usuarios, roles;
@@ -24,7 +24,7 @@ CREATE TABLE usuarios (
   correo VARCHAR(190) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
   telefono VARCHAR(30) NULL,
-  foto VARCHAR(255) NULL,
+  foto MEDIUMTEXT NULL,
   activo TINYINT(1) NOT NULL DEFAULT 1,
   ultimo_acceso DATETIME NULL,
   creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -48,6 +48,7 @@ CREATE TABLE carnets (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   usuario_id BIGINT UNSIGNED NOT NULL UNIQUE,
   codigo_qr CHAR(36) NOT NULL UNIQUE,
+  qr_entregado TINYINT(1) NOT NULL DEFAULT 0,
   emitido_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   vence_en DATE NULL,
   CONSTRAINT fk_carnets_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
@@ -285,6 +286,16 @@ CREATE TABLE recuperacion_password (
   usado_en DATETIME NULL,
   creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_recuperacion_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE verificaciones_correo (
+  correo VARCHAR(190) PRIMARY KEY,
+  codigo_hash VARCHAR(255) NOT NULL,
+  datos MEDIUMTEXT NOT NULL,
+  vence_en DATETIME NOT NULL,
+  intentos TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_verificaciones_vence (vence_en)
 ) ENGINE=InnoDB;
 
 INSERT INTO roles (id, nombre, descripcion) VALUES

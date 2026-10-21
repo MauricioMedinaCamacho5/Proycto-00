@@ -1,0 +1,7 @@
+USE proyecto01;
+
+ALTER TABLE usuarios
+  MODIFY foto MEDIUMTEXT NULL;
+
+ALTER TABLE carnets
+  ADD COLUMN qr_entregado TINYINT(1) NOT NULL DEFAULT 0 AFTER codigo_qr;

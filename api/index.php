@@ -42,6 +42,17 @@ function audit(PDO $db, ?int $actor, string $action, string $entity, ?int $id = 
     $stmt->execute([$actor, $action, $entity, $id, $detail ? json_encode($detail, JSON_UNESCAPED_UNICODE) : null]);
 }
 
+function notifyAttendance(PDO $db, int $studentId, string $status, string $date, ?string $observation): void
+{
+    $labels = ['presente' => 'Asistió', 'ausente' => 'Faltó', 'tarde' => 'Llegó tarde', 'permiso' => 'Permiso'];
+    $message = 'Tu asistencia del ' . date('d/m/Y', strtotime($date)) . ' fue registrada como: ' . ($labels[$status] ?? $status) . '.';
+    if ($observation !== null && trim($observation) !== '') {
+        $message .= ' Motivo u observación: ' . trim($observation);
+    }
+    $stmt = $db->prepare('INSERT INTO notificaciones (usuario_id, titulo, mensaje) VALUES (?, ?, ?)');
+    $stmt->execute([$studentId, 'Actualización de asistencia', $message]);
+}
+
 function uuid4(): string
 {
     $bytes = random_bytes(16);
@@ -55,10 +66,10 @@ function userFromQr(PDO $db, string $qr): ?int
 {
     $stmt = $db->prepare('SELECT c.usuario_id FROM carnets c
         JOIN usuarios u ON u.id = c.usuario_id AND u.activo = 1
-        WHERE (c.codigo_qr = ? OR u.documento = ?) AND (c.vence_en IS NULL OR c.vence_en >= CURDATE())
+        WHERE c.codigo_qr = ? AND (c.vence_en IS NULL OR c.vence_en >= CURDATE())
           AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL)
         LIMIT 1');
-    $stmt->execute([$qr, $qr]);
+    $stmt->execute([$qr]);
     $id = $stmt->fetchColumn();
     return $id ? (int)$id : null;
 }
@@ -71,21 +82,55 @@ function safeSpreadsheetCell($value)
     return $value;
 }
 
-function isLocalRecoveryAllowed(): bool
-{
-    $host = strtolower(preg_replace('/:\d+$/', '', $_SERVER['HTTP_HOST'] ?? ''));
-    $remoteAddress = $_SERVER['REMOTE_ADDR'] ?? '';
-    $localHost = in_array($host, ['localhost', '127.0.0.1', '[::1]'], true);
-    $localAddress = in_array($remoteAddress, ['127.0.0.1', '::1'], true);
-    return getenv('APP_ENV') === 'local' && $localHost && $localAddress;
-}
-
 function createRecoveryToken(PDO $db, int $userId): string
 {
     $token = bin2hex(random_bytes(32));
     $db->prepare('INSERT INTO recuperacion_password (usuario_id,token_hash,vence_en) VALUES (?,?,DATE_ADD(NOW(), INTERVAL 30 MINUTE))')
         ->execute([$userId, hash('sha256', $token)]);
     return $token;
+}
+
+function createSystemMailer(): \PHPMailer\PHPMailer\PHPMailer
+{
+    if (!class_exists(\PHPMailer\PHPMailer\PHPMailer::class)) {
+        throw new RuntimeException('Falta PHPMailer. Ejecuta composer install en la carpeta del proyecto.');
+    }
+    $host = getenv('SMTP_HOST') ?: '';
+    $username = getenv('SMTP_USER') ?: '';
+    $password = getenv('SMTP_PASSWORD') ?: '';
+    $from = getenv('SMTP_FROM') ?: $username;
+    $port = (int)(getenv('SMTP_PORT') ?: 587);
+    if ($host === '' || $username === '' || $password === '' || !filter_var($from, FILTER_VALIDATE_EMAIL)) {
+        throw new RuntimeException('Configura SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD y SMTP_FROM en Apache.');
+    }
+    $secure = strtolower(getenv('SMTP_SECURE') ?: ($port === 465 ? 'ssl' : 'tls'));
+    if (!in_array($secure, ['tls','ssl'], true)) {
+        throw new RuntimeException('SMTP_SECURE debe ser tls (puerto 587) o ssl (puerto 465).');
+    }
+    $mailer = new \PHPMailer\PHPMailer\PHPMailer(true);
+    $mailer->isSMTP();
+    $mailer->Host = $host;
+    $mailer->SMTPAuth = true;
+    $mailer->Username = $username;
+    $mailer->Password = str_replace(' ', '', $password);
+    $mailer->Port = $port;
+    $mailer->SMTPSecure = $secure === 'ssl'
+        ? \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS
+        : \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+    $mailer->CharSet = 'UTF-8';
+    $mailer->setFrom($from, 'Gestion Institucional');
+    return $mailer;
+}
+
+function sendSystemEmail(string $to, string $subject, string $html, string $text): void
+{
+    $mailer = createSystemMailer();
+    $mailer->addAddress($to);
+    $mailer->isHTML(true);
+    $mailer->Subject = $subject;
+    $mailer->Body = $html;
+    $mailer->AltBody = $text;
+    $mailer->send();
 }
 
 function currentUser(PDO $db): ?array
@@ -99,8 +144,10 @@ function currentUser(PDO $db): ?array
         return null;
     }
     $_SESSION['last_activity'] = time();
-    $stmt = $db->prepare('SELECT u.id, u.rol_id, r.nombre AS rol, u.documento, u.nombres, u.apellidos, u.correo
+    $stmt = $db->prepare('SELECT u.id, u.rol_id, r.nombre AS rol, u.documento, u.nombres, u.apellidos, u.correo,
+            COALESCE(c.qr_entregado, 0) AS qr_entregado
         FROM usuarios u JOIN roles r ON r.id = u.rol_id
+        LEFT JOIN carnets c ON c.usuario_id = u.id
         WHERE u.id = ? AND u.activo = 1
           AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL)');
     $stmt->execute([$_SESSION['user_id']]);
@@ -295,75 +342,195 @@ try {
     if ($route === 'health' && $method === 'GET') {
         respond(['status' => 'ok', 'service' => 'gestion-institucional']);
     }
-    if ($route === 'auth' && ($parts[1] ?? '') === 'register' && $method === 'POST') {
+    if ($route === 'auth' && ($parts[1] ?? '') === 'register' && !isset($parts[2]) && $method === 'POST') {
         $data = body();
-        foreach (['documento','nombres','apellidos','correo','password'] as $field) {
+        $db->exec('DELETE FROM verificaciones_correo WHERE vence_en <= NOW()');
+        foreach (['documento','nombres','apellidos','correo','password','telefono'] as $field) {
             if (!isset($data[$field]) || !is_string($data[$field])) {
                 respond(['error' => 'Faltan datos obligatorios o tienen un formato incorrecto.'], 422);
             }
         }
-        if (isset($data['telefono']) && !is_string($data['telefono'])) {
-            respond(['error' => 'El telefono debe ser texto.'], 422);
+        if (isset($data['foto']) && $data['foto'] !== null && !is_string($data['foto'])) {
+            respond(['error' => 'La foto del carné no tiene un formato válido.'], 422);
         }
-        $document = trim($data['documento']);
-        $firstName = trim($data['nombres']);
-        $lastName = trim($data['apellidos']);
-        $email = trim($data['correo']);
+        $registration = [
+            'documento' => trim($data['documento']),
+            'nombres' => trim($data['nombres']),
+            'apellidos' => trim($data['apellidos']),
+            'correo' => trim($data['correo']),
+            'telefono' => trim($data['telefono']),
+            'foto' => $data['foto'] ?? null,
+        ];
         $password = $data['password'];
-        $phone = trim($data['telefono'] ?? '');
 
-        if ($document === '' || strlen($document) > 30 || $firstName === '' || strlen($firstName) > 100 ||
-            $lastName === '' || strlen($lastName) > 100 || !filter_var($email, FILTER_VALIDATE_EMAIL) ||
-            strlen($email) > 190 || strlen($password) < 8 || strlen($phone) > 30 ||
-            preg_match('/[\x00-\x1F\x7F]/', $document)) {
-            respond(['error' => 'Complete los datos correctamente y use una contrasena de al menos 8 caracteres.'], 422);
+        if ($registration['documento'] === '' || strlen($registration['documento']) > 30 ||
+            $registration['nombres'] === '' || strlen($registration['nombres']) > 100 ||
+            $registration['apellidos'] === '' || strlen($registration['apellidos']) > 100 ||
+            !filter_var($registration['correo'], FILTER_VALIDATE_EMAIL) || strlen($registration['correo']) > 190 ||
+            strlen($password) < 8 || $registration['telefono'] === '' || strlen($registration['telefono']) > 30 ||
+            preg_match('/[\x00-\x1F\x7F]/', $registration['documento'])) {
+            respond(['error' => 'Complete los datos correctamente, incluya el teléfono y use una contraseña de al menos 8 caracteres.'], 422);
+        }
+        if ($registration['foto'] !== null) {
+            if (strlen($registration['foto']) > 1400000 || !preg_match('#^data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$#', $registration['foto'], $photoMatch)) {
+                respond(['error' => 'La foto debe ser JPG, PNG o WEBP y no superar 1 MB.'], 422);
+            }
+            $photoBytes = base64_decode($photoMatch[2], true);
+            $photoInfo = $photoBytes === false ? false : finfo_buffer(new finfo(FILEINFO_MIME_TYPE), $photoBytes);
+            $allowedPhotoTypes = ['image/jpeg', 'image/png', 'image/webp'];
+            if ($photoBytes === false || strlen($photoBytes) > 1048576 || !in_array($photoInfo, $allowedPhotoTypes, true)) {
+                respond(['error' => 'La foto no es una imagen JPG, PNG o WEBP válida, o supera 1 MB.'], 422);
+            }
         }
 
-        $db->beginTransaction();
-        $duplicate = $db->prepare('SELECT 1 FROM usuarios WHERE documento = ? OR correo = ? LIMIT 1');
-        $duplicate->execute([$document, $email]);
-        if ($duplicate->fetchColumn()) {
-            $db->rollBack();
-            respond(['error' => 'Ya existe una cuenta con ese documento o correo. Inicie sesion o use la recuperacion de contrasena.'], 409);
-        }
         $requestedRole = $data['rol'] ?? 'estudiante';
         if (!in_array($requestedRole, ['estudiante','instructor','portero'], true)) {
-            $db->rollBack();
             respond(['error' => 'El registro publico solo admite estudiantes, instructores o porteria.'], 422);
+        }
+        $duplicate = $db->prepare('SELECT 1 FROM usuarios WHERE documento = ? OR correo = ? LIMIT 1');
+        $duplicate->execute([$registration['documento'], $registration['correo']]);
+        if ($duplicate->fetchColumn()) {
+            respond(['error' => 'Ya existe una cuenta con ese documento o correo. Inicie sesion o use la recuperacion de contrasena.'], 409);
+        }
+        $pending = $db->prepare('SELECT creado_en FROM verificaciones_correo WHERE correo = ? LIMIT 1');
+        $pending->execute([$registration['correo']]);
+        $pendingCreated = $pending->fetchColumn();
+        if ($pendingCreated && strtotime((string)$pendingCreated) > time() - 60) {
+            respond(['error' => 'Ya enviamos un código a este correo. Espera un minuto antes de pedir otro.'], 429);
         }
         $role = $db->prepare('SELECT id FROM roles WHERE nombre = ? LIMIT 1');
         $role->execute([$requestedRole]);
-        $roleId = $role->fetchColumn();
-        if (!$roleId) {
-            $db->rollBack();
-            respond(['error' => 'No se encontro el rol de estudiante. Contacte al administrador.'], 500);
+        if (!$role->fetchColumn()) {
+            respond(['error' => 'No se encontro el rol solicitado. Contacte al administrador.'], 500);
         }
-
-        $student = $requestedRole === 'estudiante';
-        $insert = $db->prepare('INSERT INTO usuarios (rol_id,documento,nombres,apellidos,correo,password_hash,telefono,activo) VALUES (?,?,?,?,?,?,?,?)');
-        $insert->execute([(int)$roleId, $document, $firstName, $lastName, $email, password_hash($password, PASSWORD_DEFAULT), $phone !== '' ? $phone : null, $student ? 1 : 0]);
-        $userId = (int)$db->lastInsertId();
-        if ($student) {
-            $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$userId, uuid4()]);
-            audit($db, $userId, 'registro_publico', 'usuarios', $userId, ['rol' => $requestedRole]);
-        } else {
-            $request = $db->prepare("INSERT INTO solicitudes_registro (usuario_id) VALUES (?)");
-            $request->execute([$userId]);
-            audit($db, $userId, 'solicitar_registro_personal', 'solicitudes_registro', (int)$db->lastInsertId(), ['rol' => $requestedRole]);
+        try {
+            createSystemMailer();
+        } catch (RuntimeException $exception) {
+            respond(['error' => $exception->getMessage()], 503);
         }
-        $db->commit();
+        $verificationCode = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $registration['rol'] = $requestedRole;
+        $registration['password_hash'] = password_hash($password, PASSWORD_DEFAULT);
+        $payload = json_encode($registration, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($payload === false) {
+            respond(['error' => 'No se pudo preparar la verificación del correo.'], 500);
+        }
+        $db->prepare("INSERT INTO verificaciones_correo (correo,codigo_hash,datos,vence_en,intentos,creado_en)
+            VALUES (?,?,?,DATE_ADD(NOW(), INTERVAL 15 MINUTE),0,NOW())
+            ON DUPLICATE KEY UPDATE codigo_hash = VALUES(codigo_hash), datos = VALUES(datos),
+                vence_en = VALUES(vence_en), intentos = 0, creado_en = NOW()")
+            ->execute([$registration['correo'], password_hash($verificationCode, PASSWORD_DEFAULT), $payload]);
+        $safeEmail = htmlspecialchars($registration['correo'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        try {
+            sendSystemEmail(
+                $registration['correo'],
+                'Confirma tu correo · Gestión Institucional',
+                '<div style="font-family:Arial,sans-serif;color:#183528;max-width:560px;margin:auto;padding:28px;border:1px solid #dce9dc;border-radius:20px"><h2 style="color:#075b37">Confirma tu correo</h2><p>Usa este código para verificar <strong>' . $safeEmail . '</strong> y completar tu registro:</p><p style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#087c45">' . $verificationCode . '</p><p>El código vence en 15 minutos. Si no solicitaste esta cuenta, ignora este mensaje.</p></div>',
+                "Confirma tu correo para completar el registro: {$verificationCode}. El código vence en 15 minutos."
+            );
+        } catch (\PHPMailer\PHPMailer\Exception $exception) {
+            $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$registration['correo']]);
+            error_log('[gestion-institucional] Registration email send failed: ' . $exception->getMessage());
+            respond(['error' => 'No se pudo enviar el código. Revisa la configuración SMTP de Gmail e inténtalo de nuevo.'], 503);
+        }
+        respond(['data' => [
+            'verification_required' => true,
+            'correo' => $registration['correo'],
+            'message' => 'Enviamos un código de seis dígitos a tu correo. Debes confirmarlo para terminar el registro.',
+        ]], 202);
+    }
+    if ($route === 'auth' && ($parts[1] ?? '') === 'register' && ($parts[2] ?? '') === 'verify' && $method === 'POST') {
+        $data = body();
+        $email = is_string($data['correo'] ?? null) ? trim($data['correo']) : '';
+        $code = is_string($data['codigo'] ?? null) ? trim($data['codigo']) : '';
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^\d{6}$/', $code)) {
+            respond(['error' => 'Escribe el correo y el código de seis dígitos que recibiste.'], 422);
+        }
+        $db->beginTransaction();
+        try {
+            $pendingStmt = $db->prepare('SELECT codigo_hash, datos, vence_en, intentos FROM verificaciones_correo WHERE correo = ? FOR UPDATE');
+            $pendingStmt->execute([$email]);
+            $pending = $pendingStmt->fetch();
+            if (!$pending || strtotime((string)$pending['vence_en']) <= time()) {
+                $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$email]);
+                $db->commit();
+                respond(['error' => 'El código venció o no existe. Vuelve a solicitar el envío desde el formulario de registro.'], 410);
+            }
+            if ((int)$pending['intentos'] >= 5) {
+                $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$email]);
+                $db->commit();
+                respond(['error' => 'Se superó el número de intentos. Vuelve a solicitar un código nuevo.'], 429);
+            }
+            if (!password_verify($code, $pending['codigo_hash'])) {
+                $db->prepare('UPDATE verificaciones_correo SET intentos = intentos + 1 WHERE correo = ?')->execute([$email]);
+                $db->commit();
+                respond(['error' => 'El código no coincide. Revisa el mensaje y vuelve a intentarlo.'], 422);
+            }
+            $registration = json_decode($pending['datos'], true);
+            if (!is_array($registration) || !isset($registration['rol'], $registration['password_hash'])) {
+                throw new RuntimeException('Los datos de registro pendientes no son válidos.');
+            }
+            $duplicate = $db->prepare('SELECT 1 FROM usuarios WHERE documento = ? OR correo = ? LIMIT 1');
+            $duplicate->execute([$registration['documento'], $email]);
+            if ($duplicate->fetchColumn()) {
+                $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$email]);
+                $db->commit();
+                respond(['error' => 'Ya existe una cuenta con ese documento o correo. Inicia sesión o recupera tu contraseña.'], 409);
+            }
+            $role = $db->prepare('SELECT id FROM roles WHERE nombre = ? LIMIT 1');
+            $role->execute([$registration['rol']]);
+            $roleId = $role->fetchColumn();
+            if (!$roleId) {
+                throw new RuntimeException('No se encontró el rol solicitado.');
+            }
+            $student = $registration['rol'] === 'estudiante';
+            $insert = $db->prepare('INSERT INTO usuarios (rol_id,documento,nombres,apellidos,correo,password_hash,telefono,foto,activo) VALUES (?,?,?,?,?,?,?,?,?)');
+            $insert->execute([
+                (int)$roleId, $registration['documento'], $registration['nombres'], $registration['apellidos'],
+                $email, $registration['password_hash'], $registration['telefono'], $registration['foto'], $student ? 1 : 0,
+            ]);
+            $userId = (int)$db->lastInsertId();
+            $qrCode = uuid4();
+            $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$userId, $qrCode]);
+            if ($student) {
+                audit($db, $userId, 'registro_publico_verificado', 'usuarios', $userId, ['rol' => $registration['rol']]);
+            } else {
+                $db->prepare('INSERT INTO solicitudes_registro (usuario_id) VALUES (?)')->execute([$userId]);
+                audit($db, $userId, 'solicitar_registro_personal_verificado', 'usuarios', $userId, ['rol' => $registration['rol']]);
+            }
+            $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$email]);
+            $db->commit();
 
-        if (!$student) {
+            $card = [
+                'codigo_qr' => $qrCode,
+                'usuario' => [
+                    'documento' => $registration['documento'], 'nombres' => $registration['nombres'],
+                    'apellidos' => $registration['apellidos'], 'correo' => $email, 'telefono' => $registration['telefono'],
+                    'rol' => $registration['rol'], 'foto' => $registration['foto'],
+                ],
+            ];
+            if (!$student) {
+                respond(['data' => [
+                    'pending_approval' => true,
+                    'message' => 'Correo verificado. Un administrador revisará tu solicitud antes de activar la cuenta.',
+                    'card' => $card,
+                ]], 201);
+            }
+            session_regenerate_id(true);
+            $_SESSION['user_id'] = $userId;
+            $_SESSION['last_activity'] = time();
+            $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
             respond(['data' => [
-                'pending_approval' => true,
-                'message' => 'Solicitud enviada. Un administrador revisará tus datos antes de activar la cuenta.',
+                'user' => currentUser($db),
+                'message' => 'Correo verificado y cuenta de estudiante creada correctamente.',
+                'card' => $card,
             ]], 201);
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $exception;
         }
-        session_regenerate_id(true);
-        $_SESSION['user_id'] = $userId;
-        $_SESSION['last_activity'] = time();
-        $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
-        respond(['data' => ['user' => currentUser($db), 'message' => 'Cuenta de estudiante creada correctamente.']]);
     }
     if ($route === 'registration-requests' && ($parts[1] ?? '') === 'count' && $method === 'GET') {
         requireRoles($user, ['administrador']);
@@ -372,7 +539,7 @@ try {
     }
     if ($route === 'registration-requests' && $method === 'GET') {
         requireRoles($user, ['administrador']);
-        $stmt = $db->query("SELECT s.id, u.documento, u.nombres, u.apellidos, u.correo, r.nombre AS rol, s.solicitada_en
+        $stmt = $db->query("SELECT s.id, u.documento, u.nombres, u.apellidos, u.correo, u.telefono, r.nombre AS rol, s.solicitada_en
             FROM solicitudes_registro s
             JOIN usuarios u ON u.id = s.usuario_id
             JOIN roles r ON r.id = u.rol_id
@@ -401,7 +568,11 @@ try {
 
         if ($parts[2] === 'approve') {
             $db->prepare('UPDATE usuarios SET activo = 1 WHERE id = ?')->execute([$request['usuario_id']]);
-            $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$request['usuario_id'], uuid4()]);
+            $existingCard = $db->prepare('SELECT 1 FROM carnets WHERE usuario_id = ?');
+            $existingCard->execute([$request['usuario_id']]);
+            if (!$existingCard->fetchColumn()) {
+                $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$request['usuario_id'], uuid4()]);
+            }
             $db->prepare("UPDATE solicitudes_registro SET estado = 'aprobada', revisada_en = NOW(), revisada_por = ? WHERE id = ?")
                 ->execute([$actor['id'], $requestId]);
             audit($db, (int)$actor['id'], 'aprobar_registro_personal', 'solicitudes_registro', $requestId, ['rol' => $request['rol']]);
@@ -418,7 +589,9 @@ try {
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'login' && $method === 'POST') {
         $data = body();
-        $stmt = $db->prepare('SELECT u.id, u.password_hash, u.activo FROM usuarios u WHERE u.correo = ? AND u.activo = 1
+        $stmt = $db->prepare('SELECT u.id, u.password_hash, u.activo FROM usuarios u
+            JOIN carnets c ON c.usuario_id = u.id AND c.qr_entregado = 0
+            WHERE u.correo = ? AND u.activo = 1
             AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL) LIMIT 1');
         $stmt->execute([$data['correo'] ?? '']);
         $record = $stmt->fetch();
@@ -429,60 +602,78 @@ try {
         $_SESSION['user_id'] = (int)$record['id'];
         $_SESSION['last_activity'] = time();
         $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$record['id']]);
-        audit($db, (int)$record['id'], 'inicio_sesion', 'usuarios', (int)$record['id']);
+        audit($db, (int)$record['id'], 'inicio_sesion_temporal', 'usuarios', (int)$record['id']);
         respond(['data' => currentUser($db)]);
     }
-    if ($route === 'auth' && ($parts[1] ?? '') === 'staff-barcode-login' && $method === 'POST') {
+    if ($route === 'auth' && ($parts[1] ?? '') === 'qr-login' && $method === 'POST') {
         $data = body();
-        $document = $data['documento'] ?? null;
-        $email = $data['correo'] ?? null;
-        $password = $data['password'] ?? null;
-        if (!is_string($document) || trim($document) === '' || strlen(trim($document)) > 30 ||
-            !is_string($email) || !filter_var(trim($email), FILTER_VALIDATE_EMAIL) ||
-            !is_string($password) || $password === '') {
-            respond(['error' => 'Escanea tu cédula e ingresa el correo y la contraseña de la cuenta.'], 422);
+        $qrCode = $data['codigo_qr'] ?? null;
+        if (!is_string($qrCode) || trim($qrCode) === '' || strlen(trim($qrCode)) > 64) {
+            respond(['error' => 'El código QR del carné no es válido.'], 422);
         }
-        $stmt = $db->prepare("SELECT u.id, u.password_hash FROM usuarios u
-            JOIN roles r ON r.id = u.rol_id AND r.nombre IN ('administrador','instructor','portero')
-            WHERE u.documento = ? AND u.correo = ? AND u.activo = 1
-              AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL)
-            LIMIT 1");
-        $stmt->execute([trim($document), trim($email)]);
-        $record = $stmt->fetch();
-        if (!$record || !password_verify($password, $record['password_hash'])) {
-            respond(['error' => 'No se pudo verificar la cédula, el correo o la contraseña, o la cuenta está pendiente o bloqueada.'], 401);
-        }
-        session_regenerate_id(true);
-        $_SESSION['user_id'] = (int)$record['id'];
-        $_SESSION['last_activity'] = time();
-        $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$record['id']]);
-        audit($db, (int)$record['id'], 'inicio_sesion_codigo_cedula', 'usuarios', (int)$record['id']);
-        respond(['data' => currentUser($db)]);
-    }
-    if ($route === 'auth' && ($parts[1] ?? '') === 'barcode-login' && $method === 'POST') {
-        $data = body();
-        $document = $data['documento'] ?? null;
-        if (!is_string($document) || trim($document) === '' || strlen(trim($document)) > 30) {
-            respond(['error' => 'El código del documento no es válido.'], 422);
-        }
-        $stmt = $db->prepare("SELECT u.id FROM usuarios u
-            JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
-            JOIN carnets c ON c.usuario_id = u.id
-            WHERE u.documento = ? AND u.activo = 1
-              AND (c.vence_en IS NULL OR c.vence_en >= CURDATE())
-              AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL)
-            LIMIT 1");
-        $stmt->execute([trim($document)]);
-        $userId = $stmt->fetchColumn();
+        $userId = userFromQr($db, trim($qrCode));
         if (!$userId) {
-            respond(['error' => 'No se encontró un estudiante activo con ese código.'], 401);
+            respond(['error' => 'No se encontró una cuenta activa con ese carné. Revisa que la solicitud esté aprobada y que el QR no haya vencido.'], 401);
         }
         session_regenerate_id(true);
         $_SESSION['user_id'] = (int)$userId;
         $_SESSION['last_activity'] = time();
         $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
-        audit($db, (int)$userId, 'inicio_sesion_codigo_barras', 'usuarios', (int)$userId);
+        $db->prepare('UPDATE carnets SET qr_entregado = 1 WHERE usuario_id = ?')->execute([$userId]);
+        audit($db, (int)$userId, 'inicio_sesion_codigo_qr', 'usuarios', (int)$userId);
         respond(['data' => currentUser($db)]);
+    }
+    if ($route === 'auth' && ($parts[1] ?? '') === 'card' && $method === 'GET') {
+        $account = requireRoles($user, ['administrador','instructor','estudiante','portero']);
+        $stmt = $db->prepare('SELECT c.codigo_qr, u.telefono, u.foto FROM carnets c JOIN usuarios u ON u.id = c.usuario_id
+            WHERE c.usuario_id = ? AND (c.vence_en IS NULL OR c.vence_en >= CURDATE())');
+        $stmt->execute([$account['id']]);
+        $card = $stmt->fetch();
+        if (!$card) {
+            respond(['error' => 'No se encontró un carné activo para esta cuenta.'], 404);
+        }
+        $account['telefono'] = $card['telefono'];
+        $account['foto'] = $card['foto'];
+        $account['rol'] = $account['rol'];
+        respond(['data' => ['codigo_qr' => $card['codigo_qr'], 'usuario' => $account]]);
+    }
+    if ($route === 'auth' && ($parts[1] ?? '') === 'card-issued' && $method === 'POST') {
+        $data = body();
+        $qrCode = $data['codigo_qr'] ?? null;
+        if (!is_string($qrCode) || trim($qrCode) === '' || strlen(trim($qrCode)) > 64) {
+            respond(['error' => 'El código QR del carné no es válido.'], 422);
+        }
+        $accountId = null;
+        if ($user) {
+            $account = requireRoles($user, ['administrador','instructor','estudiante','portero']);
+            $accountId = (int)$account['id'];
+        }
+        $ownership = $accountId === null ? '' : 'c.usuario_id = ? OR ';
+        $sql = "UPDATE carnets c SET qr_entregado = 1
+            WHERE c.codigo_qr = ? AND ($ownership EXISTS (
+                SELECT 1 FROM solicitudes_registro s
+                WHERE s.usuario_id = c.usuario_id AND s.estado = 'pendiente'
+            ))";
+        $stmt = $db->prepare($sql);
+        $params = [trim($qrCode)];
+        if ($accountId !== null) {
+            $params[] = $accountId;
+        }
+        $stmt->execute($params);
+        $ownershipCheck = $accountId === null ? '' : 'c.usuario_id = ? OR ';
+        $ownsCard = $db->prepare("SELECT c.qr_entregado FROM carnets c
+            WHERE c.codigo_qr = ? AND ($ownershipCheck EXISTS (
+                SELECT 1 FROM solicitudes_registro s
+                WHERE s.usuario_id = c.usuario_id AND s.estado = 'pendiente'
+            ))");
+        $ownsCard->execute($params);
+        if (!$stmt->rowCount()) {
+            $issued = $ownsCard->fetchColumn();
+            if ($issued === false) {
+                respond(['error' => 'No se encontró un carné pendiente o asociado a esta cuenta.'], 404);
+            }
+        }
+        respond(['data' => ['message' => 'Carné registrado como entregado.', 'qr_entregado' => true]]);
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'logout' && $method === 'POST') {
         if ($user) {
@@ -497,55 +688,32 @@ try {
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'recovery' && $method === 'POST') {
         $data = body();
+        try {
+            createSystemMailer();
+        } catch (RuntimeException $exception) {
+            respond(['error' => $exception->getMessage()], 503);
+        }
         $stmt = $db->prepare('SELECT id, correo FROM usuarios WHERE correo = ? AND activo = 1');
         $stmt->execute([$data['correo'] ?? '']);
         $account = $stmt->fetch();
         if ($account) {
-            $smtpHost = getenv('SMTP_HOST') ?: '';
-            $smtpUser = getenv('SMTP_USER') ?: '';
-            $smtpPassword = getenv('SMTP_PASSWORD') ?: '';
-            $smtpFrom = getenv('SMTP_FROM') ?: $smtpUser;
-            $smtpReady = $smtpHost !== '' && $smtpUser !== '' && $smtpPassword !== '' && $smtpFrom !== '';
-
-            if (class_exists(\PHPMailer\PHPMailer\PHPMailer::class) && $smtpReady) {
-                $token = createRecoveryToken($db, (int)$account['id']);
-                $baseUrl = rtrim(getenv('APP_URL') ?: 'http://localhost/gestion', '/');
-                $link = $baseUrl . '/restablecer.html?token=' . urlencode($token);
-                $mailer = new \PHPMailer\PHPMailer\PHPMailer(true);
-                $mailer->isSMTP();
-                $mailer->Host = $smtpHost;
-                $mailer->SMTPAuth = true;
-                $mailer->Username = $smtpUser;
-                $mailer->Password = $smtpPassword;
-                $mailer->Port = (int)(getenv('SMTP_PORT') ?: 587);
-                $mailer->SMTPSecure = \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-                $mailer->setFrom($smtpFrom, 'Gestion Institucional');
-                $mailer->addAddress($account['correo']);
-                $mailer->isHTML(true);
-                $mailer->Subject = 'Recuperacion de contrasena';
-                $mailer->Body = 'Use este enlace para cambiar su contrasena (vence en 30 minutos): <a href="' . htmlspecialchars($link, ENT_QUOTES) . '">Restablecer contrasena</a>';
-                try {
-                    $mailer->send();
-                } catch (\PHPMailer\PHPMailer\Exception $exception) {
-                    $db->prepare('DELETE FROM recuperacion_password WHERE token_hash = ?')->execute([hash('sha256', $token)]);
-                    error_log('[gestion-institucional] SMTP send failed: ' . $exception->getMessage());
-                    respond(['error' => 'No se pudo enviar el correo. Verifique la configuracion SMTP de XAMPP.'], 503);
-                }
-            } elseif (isLocalRecoveryAllowed()) {
-                $token = createRecoveryToken($db, (int)$account['id']);
-                $scriptDirectory = str_replace('\\', '/', dirname(dirname($_SERVER['SCRIPT_NAME'] ?? '/gestion/api/index.php')));
-                $baseUrl = 'http://' . $_SERVER['HTTP_HOST'] . rtrim($scriptDirectory, '/');
-                $link = $baseUrl . '/restablecer.html?token=' . urlencode($token);
-                respond(['data' => [
-                    'message' => 'El correo SMTP no está configurado. Enlace local de un solo uso; vence en 30 minutos.',
-                    'local_reset_url' => $link,
-                ]]);
-            } else {
-                error_log('[gestion-institucional] Password recovery requires PHPMailer and SMTP configuration.');
-                respond(['error' => 'El restablecimiento por correo requiere configurar PHPMailer y SMTP.'], 503);
+            $token = createRecoveryToken($db, (int)$account['id']);
+            $baseUrl = rtrim(getenv('APP_URL') ?: 'http://localhost/gestion', '/');
+            $link = $baseUrl . '/restablecer.html?token=' . urlencode($token);
+            try {
+                sendSystemEmail(
+                    $account['correo'],
+                    'Recuperación de contraseña · Gestión Institucional',
+                    '<div style="font-family:Arial,sans-serif;color:#183528;max-width:560px;margin:auto;padding:28px;border:1px solid #dce9dc;border-radius:20px"><h2 style="color:#075b37">Recupera tu contraseña</h2><p>Recibimos una solicitud para cambiar la contraseña de tu cuenta.</p><p><a style="display:inline-block;padding:13px 20px;border-radius:999px;background:#087c45;color:#fff;text-decoration:none;font-weight:bold" href="' . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">Crear una contraseña nueva</a></p><p>El enlace vence en 30 minutos y solo puede usarse una vez. Si no solicitaste este cambio, ignora este mensaje.</p></div>',
+                    "Usa este enlace para restablecer tu contraseña (vence en 30 minutos): {$link}"
+                );
+            } catch (\PHPMailer\PHPMailer\Exception $exception) {
+                $db->prepare('DELETE FROM recuperacion_password WHERE token_hash = ?')->execute([hash('sha256', $token)]);
+                error_log('[gestion-institucional] Password recovery email send failed: ' . $exception->getMessage());
+                respond(['error' => 'No se pudo enviar el correo. Verifica la cuenta y la configuración SMTP de Gmail.'], 503);
             }
         }
-        respond(['data' => ['message' => 'Si el correo esta registrado, recibira instrucciones para recuperar su cuenta.']]);
+        respond(['data' => ['message' => 'Si el correo está registrado, recibirás instrucciones para recuperar tu cuenta.']]);
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'reset-password' && $method === 'POST') {
         $data = body();
@@ -624,6 +792,171 @@ try {
         }
         respond(['data' => array_values($alerts)]);
     }
+    if ($route === 'attendance' && ($parts[1] ?? '') === 'summary' && $method === 'GET') {
+        $student = requireRoles($user, ['estudiante']);
+        $stmt = $db->prepare("SELECT
+            COUNT(*) AS total,
+            COALESCE(SUM(estado = 'presente'), 0) AS presentes,
+            COALESCE(SUM(estado = 'ausente'), 0) AS ausencias,
+            COALESCE(SUM(estado = 'tarde'), 0) AS retrasos,
+            COALESCE(SUM(estado = 'permiso'), 0) AS permisos
+            FROM asistencias WHERE usuario_id = ?");
+        $stmt->execute([$student['id']]);
+        $summary = $stmt->fetch();
+        $attended = (int)$summary['presentes'] + (int)$summary['retrasos'];
+        $tracked = $attended + (int)$summary['ausencias'];
+        $summary['total'] = (int)$summary['total'];
+        $summary['presentes'] = (int)$summary['presentes'];
+        $summary['ausencias'] = (int)$summary['ausencias'];
+        $summary['retrasos'] = (int)$summary['retrasos'];
+        $summary['permisos'] = (int)$summary['permisos'];
+        $summary['evaluadas'] = $tracked;
+        $summary['porcentaje'] = $tracked > 0 ? (int)round(100 * $attended / $tracked) : 0;
+        respond(['data' => $summary]);
+    }
+    if ($route === 'attendance' && ($parts[1] ?? '') === 'progress' && $method === 'GET') {
+        $instructor = requireRoles($user, ['instructor']);
+        $instructorId = (int)$instructor['id'];
+        $studentId = $_GET['usuario_id'] ?? '';
+        if ($studentId !== '') {
+            if (!ctype_digit((string)$studentId) || (int)$studentId < 1) {
+                respond(['error' => 'El estudiante seleccionado no es válido.'], 422);
+            }
+            $history = $db->prepare("SELECT a.fecha, f.codigo AS ficha_codigo, f.nombre AS ficha_nombre,
+                    a.estado, a.observacion,
+                    (SELECT GROUP_CONCAT(DISTINCT amb.nombre ORDER BY amb.nombre SEPARATOR ', ')
+                     FROM horarios h JOIN ambientes amb ON amb.id = h.ambiente_id
+                     WHERE h.ficha_id = a.ficha_id AND h.instructor_id = ?) AS ambientes
+                FROM asistencias a
+                JOIN fichas f ON f.id = a.ficha_id
+                JOIN fichas_usuarios fu ON fu.ficha_id = a.ficha_id AND fu.usuario_id = a.usuario_id
+                WHERE a.usuario_id = ?
+                  AND a.ficha_id IN (SELECT ficha_id FROM horarios WHERE instructor_id = ?)
+                ORDER BY a.fecha DESC, f.codigo
+                LIMIT 500");
+            $history->execute([$instructorId, (int)$studentId, $instructorId]);
+            respond(['data' => $history->fetchAll()]);
+        }
+        $stmt = $db->prepare("SELECT u.documento, u.nombres, u.apellidos,
+                u.id AS usuario_id,
+                f.codigo AS ficha_codigo, f.nombre AS ficha_nombre,
+                COALESCE(env.ambientes, '') AS ambientes,
+                COUNT(DISTINCT CASE WHEN a.estado = 'presente' THEN a.id END) AS presentes,
+                COUNT(DISTINCT CASE WHEN a.estado = 'ausente' THEN a.id END) AS ausencias,
+                COUNT(DISTINCT CASE WHEN a.estado = 'tarde' THEN a.id END) AS retrasos,
+                COUNT(DISTINCT CASE WHEN a.estado = 'permiso' THEN a.id END) AS permisos,
+                MAX(a.fecha) AS ultima_clase
+            FROM horarios instructor_horarios
+            JOIN fichas f ON f.id = instructor_horarios.ficha_id AND f.estado = 'activa'
+            JOIN fichas_usuarios fu ON fu.ficha_id = f.id
+            JOIN usuarios u ON u.id = fu.usuario_id AND u.activo = 1
+            JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
+            LEFT JOIN asistencias a ON a.usuario_id = u.id AND a.ficha_id = f.id
+            LEFT JOIN (
+                SELECT h.ficha_id, GROUP_CONCAT(DISTINCT amb.nombre ORDER BY amb.nombre SEPARATOR ', ') AS ambientes
+                FROM horarios h JOIN ambientes amb ON amb.id = h.ambiente_id
+                WHERE h.instructor_id = ?
+                GROUP BY h.ficha_id
+            ) env ON env.ficha_id = f.id
+            WHERE instructor_horarios.instructor_id = ?
+            GROUP BY u.id, u.documento, u.nombres, u.apellidos, f.id, f.codigo, f.nombre, env.ambientes
+            ORDER BY u.apellidos, u.nombres, f.codigo");
+        $stmt->execute([$instructorId, $instructorId]);
+        respond(['data' => $stmt->fetchAll()]);
+    }
+    if ($route === 'attendance' && ($parts[1] ?? '') === 'roster' && $method === 'GET') {
+        $actor = requireRoles($user, ['administrador','instructor']);
+        $environmentId = $_GET['ambiente_id'] ?? '';
+        if ($environmentId !== '' && !ctype_digit((string)$environmentId)) {
+            respond(['error' => 'El ambiente seleccionado no es válido.'], 422);
+        }
+        $environmentConditions = [];
+        $environmentParams = [];
+        if ($actor['rol'] === 'instructor') {
+            $environmentConditions[] = 'h.instructor_id = ?';
+            $environmentParams[] = (int)$actor['id'];
+        }
+        $environmentStmt = $db->prepare('SELECT DISTINCT amb.id, amb.codigo, amb.nombre
+            FROM ambientes amb JOIN horarios h ON h.ambiente_id = amb.id' .
+            ($environmentConditions ? ' WHERE ' . implode(' AND ', $environmentConditions) : '') .
+            ' ORDER BY amb.nombre, amb.codigo');
+        $environmentStmt->execute($environmentParams);
+        $environments = $environmentStmt->fetchAll();
+        $requestedEnvironment = $environmentId === '' ? 0 : (int)$environmentId;
+        if ($requestedEnvironment && !in_array($requestedEnvironment, array_map(static fn($environment) => (int)$environment['id'], $environments), true)) {
+            respond(['error' => 'No tienes acceso al ambiente seleccionado.'], 403);
+        }
+        $fichaConditions = ["f.estado = 'activa'"];
+        $fichaParams = [];
+        if ($actor['rol'] === 'instructor') {
+            $fichaConditions[] = 'EXISTS (SELECT 1 FROM horarios h WHERE h.ficha_id = f.id AND h.instructor_id = ?)';
+            $fichaParams[] = (int)$actor['id'];
+        }
+        if ($requestedEnvironment) {
+            $fichaConditions[] = 'EXISTS (SELECT 1 FROM horarios h WHERE h.ficha_id = f.id AND h.ambiente_id = ?' .
+                ($actor['rol'] === 'instructor' ? ' AND h.instructor_id = ?' : '') . ')';
+            $fichaParams[] = $requestedEnvironment;
+            if ($actor['rol'] === 'instructor') {
+                $fichaParams[] = (int)$actor['id'];
+            }
+        }
+        $fichasStmt = $db->prepare('SELECT f.id, f.codigo, f.nombre FROM fichas f WHERE ' .
+            implode(' AND ', $fichaConditions) . ' ORDER BY f.nombre, f.codigo');
+        $fichasStmt->execute($fichaParams);
+        $fichas = $fichasStmt->fetchAll();
+        $requestedFicha = $_GET['ficha_id'] ?? '';
+        $fichaId = ctype_digit((string)$requestedFicha) ? (int)$requestedFicha : (int)($fichas[0]['id'] ?? 0);
+        $ficha = null;
+        foreach ($fichas as $candidate) {
+            if ((int)$candidate['id'] === $fichaId) {
+                $ficha = $candidate;
+                break;
+            }
+        }
+        if (!$ficha) {
+            respond(['data' => ['ambientes' => $environments, 'ambiente_seleccionado' => $requestedEnvironment ?: null,
+                'fichas' => $fichas, 'estudiantes' => []]]);
+        }
+
+        $date = (string)($_GET['fecha'] ?? date('Y-m-d'));
+        $parsedDate = DateTime::createFromFormat('!Y-m-d', $date);
+        if (!$parsedDate || $parsedDate->format('Y-m-d') !== $date) {
+            respond(['error' => 'La fecha debe usar el formato YYYY-MM-DD.'], 422);
+        }
+        $studentsStmt = $db->prepare("SELECT u.id, u.documento, u.nombres, u.apellidos, u.correo, u.telefono, u.foto,
+                c.codigo_qr, a.id AS asistencia_id, a.estado, a.observacion
+            FROM fichas_usuarios fu
+            JOIN usuarios u ON u.id = fu.usuario_id
+            JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
+            LEFT JOIN carnets c ON c.usuario_id = u.id
+            LEFT JOIN asistencias a ON a.usuario_id = u.id AND a.ficha_id = fu.ficha_id AND a.fecha = ?
+            WHERE fu.ficha_id = ? AND u.activo = 1
+            ORDER BY u.nombres, u.apellidos, u.id");
+        $studentsStmt->execute([$date, $fichaId]);
+        respond(['data' => ['ambientes' => $environments, 'ambiente_seleccionado' => $requestedEnvironment ?: null,
+            'fichas' => $fichas, 'ficha_seleccionada' => $fichaId, 'fecha' => $date,
+            'estudiantes' => $studentsStmt->fetchAll()]]);
+    }
+    if ($route === 'schedules' && $method === 'GET' && $user && $user['rol'] === 'estudiante') {
+        $student = requireRoles($user, ['estudiante']);
+        $stmt = $db->prepare("SELECT
+                CASE h.dia_semana
+                    WHEN 1 THEN 'Lunes' WHEN 2 THEN 'Martes' WHEN 3 THEN 'Miércoles'
+                    WHEN 4 THEN 'Jueves' WHEN 5 THEN 'Viernes' WHEN 6 THEN 'Sábado'
+                    WHEN 7 THEN 'Domingo'
+                END AS dia,
+                h.hora_inicio, h.hora_fin, h.asignatura,
+                f.codigo AS ficha, f.nombre AS nombre_ficha, a.nombre AS ambiente,
+                CONCAT(i.nombres, ' ', i.apellidos) AS instructor
+            FROM horarios h
+            JOIN fichas_usuarios fu ON fu.ficha_id = h.ficha_id AND fu.usuario_id = ?
+            JOIN fichas f ON f.id = h.ficha_id
+            JOIN ambientes a ON a.id = h.ambiente_id
+            JOIN usuarios i ON i.id = h.instructor_id
+            ORDER BY h.dia_semana, h.hora_inicio, h.asignatura");
+        $stmt->execute([(int)$student['id']]);
+        respond(['data' => $stmt->fetchAll()]);
+    }
     if ($route === 'equipment-movements' && ($parts[1] ?? '') === 'scan' && $method === 'POST') {
         $actor = requireRoles($user, ['administrador','portero']);
         $data = body();
@@ -668,15 +1001,63 @@ try {
                 respond(['error' => "Falta el campo {$required}."], 422);
             }
         }
-        if (!in_array($data['estado'], ['presente','ausente','tarde','permiso'], true)) {
-            respond(['error' => 'Estado de asistencia no valido.'], 422);
+        if (!ctype_digit((string)$data['usuario_id']) || !ctype_digit((string)$data['ficha_id']) ||
+            !in_array($data['estado'], ['presente','ausente','tarde','permiso'], true)) {
+            respond(['error' => 'El estudiante, la ficha o el estado de asistencia no son válidos.'], 422);
         }
-        $stmt = $db->prepare('INSERT INTO asistencias (usuario_id,ficha_id,fecha,estado,registrado_por,observacion)
-            VALUES (?,?,COALESCE(?,CURDATE()),?,?,?)');
-        $stmt->execute([$data['usuario_id'], $data['ficha_id'], $data['fecha'] ?? null, $data['estado'], $actor['id'], $data['observacion'] ?? null]);
-        $id = (int)$db->lastInsertId();
-        audit($db, (int)$actor['id'], 'registrar_asistencia', 'asistencias', $id);
-        respond(['data' => ['id' => $id]], 201);
+        $date = (string)($data['fecha'] ?? date('Y-m-d'));
+        $parsedDate = DateTime::createFromFormat('!Y-m-d', $date);
+        if (!$parsedDate || $parsedDate->format('Y-m-d') !== $date) {
+            respond(['error' => 'La fecha debe usar el formato YYYY-MM-DD.'], 422);
+        }
+        $enrollment = $db->prepare("SELECT 1 FROM fichas_usuarios fu
+            JOIN usuarios u ON u.id = fu.usuario_id AND u.activo = 1
+            JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
+            WHERE fu.usuario_id = ? AND fu.ficha_id = ?");
+        $enrollment->execute([(int)$data['usuario_id'], (int)$data['ficha_id']]);
+        if (!$enrollment->fetchColumn()) {
+            respond(['error' => 'El estudiante no está inscrito en la ficha seleccionada.'], 422);
+        }
+        if ($actor['rol'] === 'instructor') {
+            $assigned = $db->prepare('SELECT 1 FROM horarios WHERE ficha_id = ? AND instructor_id = ?');
+            $assigned->execute([(int)$data['ficha_id'], (int)$actor['id']]);
+            if (!$assigned->fetchColumn()) {
+                respond(['error' => 'Solo puedes registrar asistencia en tus fichas asignadas.'], 403);
+            }
+        }
+        $db->beginTransaction();
+        try {
+            $existing = $db->prepare('SELECT id, estado, observacion FROM asistencias WHERE usuario_id = ? AND ficha_id = ? AND fecha = ?');
+            $existing->execute([(int)$data['usuario_id'], (int)$data['ficha_id'], $date]);
+            $previous = $existing->fetch();
+            if ($previous) {
+                $stmt = $db->prepare('UPDATE asistencias SET estado = ?, observacion = ?, registrado_por = ? WHERE id = ?');
+                $observation = $data['observacion'] ?? null;
+                $stmt->execute([$data['estado'], $observation, $actor['id'], $previous['id']]);
+                $id = (int)$previous['id'];
+                $action = 'actualizar';
+                if ($previous['estado'] !== $data['estado'] || $previous['observacion'] !== $observation) {
+                    notifyAttendance($db, (int)$data['usuario_id'], $data['estado'], $date, $observation);
+                }
+            } else {
+                $observation = $data['observacion'] ?? null;
+                $stmt = $db->prepare('INSERT INTO asistencias (usuario_id,ficha_id,fecha,estado,registrado_por,observacion)
+                    VALUES (?,?,?,?,?,?)');
+                $stmt->execute([(int)$data['usuario_id'], (int)$data['ficha_id'], $date,
+                    $data['estado'], $actor['id'], $observation]);
+                $id = (int)$db->lastInsertId();
+                $action = 'crear';
+                notifyAttendance($db, (int)$data['usuario_id'], $data['estado'], $date, $observation);
+            }
+            audit($db, (int)$actor['id'], $action, 'asistencias', $id);
+            $db->commit();
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $exception;
+        }
+        respond(['data' => ['id' => $id]]);
     }
     if ($route === 'accesses' && $method === 'POST') {
         $actor = requireRoles($user, ['administrador','portero']);
@@ -732,7 +1113,7 @@ try {
     }
 
     $resources = [
-        'users' => ['table'=>'usuarios','columns'=>['id','rol_id','documento','nombres','apellidos','correo','telefono','foto','activo','ultimo_acceso','creado_en'],'fields'=>['rol_id','documento','nombres','apellidos','correo','password','telefono','foto','activo']],
+        'users' => ['table'=>'usuarios','columns'=>['id','rol_id','documento','nombres','apellidos','correo','telefono','activo','ultimo_acceso','creado_en'],'fields'=>['rol_id','documento','nombres','apellidos','correo','password','telefono','activo']],
         'environments' => ['table'=>'ambientes','columns'=>['id','codigo','nombre','ubicacion','capacidad','estado','descripcion'],'fields'=>['codigo','nombre','ubicacion','capacidad','estado','descripcion']],
         'fichas' => ['table'=>'fichas','columns'=>['id','codigo','nombre','fecha_inicio','fecha_fin','estado'],'fields'=>['codigo','nombre','fecha_inicio','fecha_fin','estado']],
         'enrollments' => ['table'=>'fichas_usuarios','columns'=>['id','ficha_id','usuario_id','inscrito_en'],'fields'=>['ficha_id','usuario_id']],
@@ -839,8 +1220,63 @@ try {
     $resource = $resources[$route];
     $id = isset($parts[1]) && ctype_digit($parts[1]) ? (int)$parts[1] : null;
 
+    if ($route === 'attendance' && $actor['rol'] === 'instructor' && $id !== null) {
+        $assignedRecord = $db->prepare('SELECT 1 FROM asistencias a JOIN horarios h ON h.ficha_id = a.ficha_id
+            WHERE a.id = ? AND h.instructor_id = ? LIMIT 1');
+        $assignedRecord->execute([$id, (int)$actor['id']]);
+        if (!$assignedRecord->fetchColumn()) {
+            respond(['error' => 'Solo puedes administrar asistencias de tus fichas asignadas.'], 403);
+        }
+    }
+    if ($route === 'attendance' && $id !== null && in_array($method, ['PUT','PATCH'], true)) {
+        $data = body();
+        $unknown = array_diff(array_keys($data), ['estado','observacion']);
+        if ($unknown) {
+            respond(['error' => 'Solo puedes editar el estado y la observación de la asistencia.'], 422);
+        }
+        if (!$data || array_key_exists('estado', $data) && !in_array($data['estado'], ['presente','ausente','tarde','permiso'], true)) {
+            respond(['error' => 'El estado de asistencia no es válido.'], 422);
+        }
+        if (isset($data['observacion']) && (!is_string($data['observacion']) || mb_strlen($data['observacion']) > 500)) {
+            respond(['error' => 'La observación debe tener máximo 500 caracteres.'], 422);
+        }
+        $previousStmt = $db->prepare('SELECT usuario_id, estado, fecha, observacion FROM asistencias WHERE id = ?');
+        $previousStmt->execute([$id]);
+        $previous = $previousStmt->fetch();
+        if (!$previous) {
+            respond(['error' => 'Registro no encontrado.'], 404);
+        }
+        $db->beginTransaction();
+        try {
+            $fields = [];
+            $values = [];
+            foreach ($data as $field => $value) {
+                $fields[] = "{$field} = ?";
+                $values[] = $value === '' ? null : $value;
+            }
+            $values[] = $id;
+            $stmt = $db->prepare('UPDATE asistencias SET ' . implode(', ', $fields) . ' WHERE id = ?');
+            $stmt->execute($values);
+            audit($db, (int)$actor['id'], 'actualizar', 'asistencias', $id);
+            $newStatus = $data['estado'] ?? $previous['estado'];
+            $newObservation = array_key_exists('observacion', $data) ? ($data['observacion'] === '' ? null : $data['observacion']) : $previous['observacion'];
+            if ($previous['estado'] !== $newStatus || $previous['observacion'] !== $newObservation) {
+                notifyAttendance($db, (int)$previous['usuario_id'], $newStatus, $previous['fecha'], $newObservation);
+            }
+            $db->commit();
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $exception;
+        }
+        respond(['data' => ['updated' => true]]);
+    }
     if ($route === 'attendance' && $actor['rol'] === 'estudiante') {
         $where = 'usuario_id = ?';
+        $params = [(int)$actor['id']];
+    } elseif ($route === 'attendance' && $actor['rol'] === 'instructor') {
+        $where = 'ficha_id IN (SELECT ficha_id FROM horarios WHERE instructor_id = ?)';
         $params = [(int)$actor['id']];
     } elseif ($route === 'notifications') {
         $where = 'usuario_id = ?';
@@ -913,7 +1349,8 @@ try {
         }
         saveResource($db, $resource['table'], $resource['fields'], $data, $id, $actor);
     }
-    if ($method === 'DELETE' && $id !== null && $actor['rol'] === 'administrador') {
+    if ($method === 'DELETE' && $id !== null &&
+        ($actor['rol'] === 'administrador' || $route === 'attendance' && $actor['rol'] === 'instructor')) {
         if ($route === 'blocks') {
             respond(['error' => 'El historial de bloqueos se conserva; use la acción Desbloquear.'], 409);
         }

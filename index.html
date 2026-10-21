@@ -5,123 +5,150 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#087c45">
   <title>Gestión Institucional · SENA</title>
-  <link rel="icon" type="image/png" href="web/assets/images/sena-logo.png">
-  <link rel="stylesheet" href="web/assets/css/app.css?v=20261018-sena-logo-v1">
+  <link rel="icon" type="image/svg+xml" href="web/assets/images/portal-mark.svg">
+  <link rel="stylesheet" href="web/assets/css/app.css?v=20260618-email-verification-v1">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
   <main id="landing-screen" class="landing-page">
     <header class="landing-header">
       <a class="institution-lockup landing-brand" href="#" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
-        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
-        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+        <img class="portal-mark" src="web/assets/images/portal-mark.svg" alt="">
+        <span class="institution-copy"><span class="institution-name landing-institution-title">Gestión Institucional</span><strong class="institution-center">Servicio Nacional de Aprendizaje · SENA</strong><span class="institution-motto">CENTRO DE LA INDUSTRIA, LA EMPRESA Y LOS SERVICIOS</span></span>
       </a>
-      <button id="landing-admin-login" class="button landing-admin-button" type="button">Acceso administración <span aria-hidden="true">→</span></button>
     </header>
     <section class="landing-hero">
       <div class="hero-copy">
         <p class="landing-eyebrow"><span></span> FORMACIÓN · SERVICIO · OPORTUNIDADES</p>
         <h1>Un espacio para aprender, crecer y avanzar.</h1>
-        <p class="hero-description">Gestión Institucional del Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios.</p>
+        <p class="hero-description">Un solo lugar para consultar tu formación, registrar asistencia y gestionar los servicios del Centro de la Industria, la Empresa y los Servicios.</p>
         <div class="hero-actions">
           <button id="landing-student-login" class="button landing-primary" type="button">Ingresar como estudiante <span aria-hidden="true">→</span></button>
           <button id="landing-staff-login" class="button landing-primary" type="button">Ingresar como equipo institucional <span aria-hidden="true">→</span></button>
-          <button id="landing-register" class="button landing-secondary" type="button">Registrar como <span aria-hidden="true">＋</span></button>
+          <button id="landing-admin-login" class="button landing-admin-entry" type="button">Ingresar como administrador <span aria-hidden="true">→</span></button>
+          <button id="landing-register" class="button landing-register-button" type="button">＋ Registrarme como estudiante o personal</button>
         </div>
         <div class="landing-message" id="landing-message" role="status"></div>
       </div>
       <div class="hero-art" aria-hidden="true">
         <div class="hero-sun"></div><div class="hero-orbit orbit-one"></div><div class="hero-orbit orbit-two"></div>
-        <div class="hero-panel"><img class="hero-panel-mark" src="web/assets/images/sena-logo.png" alt=""><span class="hero-panel-caption">CONOCIMIENTO<br><strong>QUE TRANSFORMA</strong></span></div>
+        <div class="hero-panel"><img class="hero-panel-mark" src="web/assets/images/portal-mark.svg" alt=""><span class="hero-panel-caption">CONOCIMIENTO<br><strong>QUE TRANSFORMA</strong></span></div>
         <div class="hero-leaf leaf-one"></div><div class="hero-leaf leaf-two"></div><div class="hero-leaf leaf-three"></div>
         <span class="hero-location">INDUSTRIA · EMPRESA · SERVICIOS</span>
       </div>
     </section>
-    <section class="landing-access" aria-label="Accesos y registro">
+    <section class="landing-access" aria-label="Información de acceso">
       <article class="landing-card student-card">
-        <span class="landing-card-icon" aria-hidden="true">01</span><p class="eyebrow">APRENDICES</p>
-        <h2>Tu formación, a un paso.</h2><p>Consulta tus horarios y asistencia. Puedes ingresar con tu código de barras o con tu cuenta.</p>
-        <button id="landing-student-register" class="landing-link" type="button">Registrarme como estudiante <span aria-hidden="true">→</span></button>
+        <span class="landing-card-icon" aria-hidden="true">01</span><p class="eyebrow">ESPACIO DEL ESTUDIANTE</p>
+        <h2>Todo tu proceso formativo.</h2><p>Consulta tus horarios, revisa las fechas de asistencia y faltas, recibe novedades y abre tu carné digital desde un solo perfil.</p>
+        <span class="landing-card-note">Acceso con el QR de tu carné</span>
       </article>
       <article class="landing-card staff-card">
         <span class="landing-card-icon" aria-hidden="true">02</span><p class="eyebrow">EQUIPO INSTITUCIONAL</p>
-        <h2>Equipo institucional.</h2><p>Instructores y portería solicitan acceso. El personal escanea su cédula y confirma con su contraseña.</p>
-        <button id="landing-staff-register" class="landing-link" type="button">Solicitar como instructor o portería <span aria-hidden="true">→</span></button>
-      </article>
-      <article class="landing-card admin-card">
-        <span class="landing-card-icon" aria-hidden="true">03</span><p class="eyebrow">ÁREA PRIVADA</p>
-        <h2>Panel administrativo.</h2><p>Usuarios, ambientes, inventario, reportes y configuración, con acceso exclusivo para administradores.</p>
-        <button id="landing-admin-open" class="landing-link" type="button">Ingresar al panel privado <span aria-hidden="true">→</span></button>
+        <h2>Herramientas para cada función.</h2><p>Instructores gestionan fichas y asistencia; portería registra accesos y equipos; administración organiza usuarios, espacios y reportes.</p>
+        <span class="landing-card-note">Un acceso para instructores, portería y administración</span>
       </article>
     </section>
     <footer class="landing-footer"><span>Servicio Nacional de Aprendizaje · SENA</span><span>Centro de la Industria, la Empresa y los Servicios</span></footer>
   </main>
 
   <main id="login-screen" class="login-wrap hidden">
-    <form id="login-form" class="login-card">
+    <div id="login-form" class="login-card">
       <button id="login-home" class="back-home" type="button">← Volver al inicio</button>
       <div class="institution-lockup auth-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
-        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
-        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+        <img class="portal-mark" src="web/assets/images/portal-mark.svg" alt="">
+        <span class="institution-copy"><span class="institution-name app-institution-title">Gestión Institucional</span><strong class="institution-center">Servicio Nacional de Aprendizaje · SENA</strong><span class="institution-motto">CENTRO DE LA INDUSTRIA, LA EMPRESA Y LOS SERVICIOS</span></span>
       </div>
       <p class="eyebrow">GESTIÓN INSTITUCIONAL · SENA</p>
       <h1>Acceso a tu cuenta</h1>
-      <p class="muted">Ingresa con tu correo y contraseña. El acceso con carné está disponible para estudiantes.</p>
-      <p id="login-scan-title" class="login-scan-title">Acceso para estudiantes</p>
-      <div class="login-scan-actions"><button id="scan-login-barcode" class="button secondary" type="button">Escanear carné</button><button id="choose-login-photo" class="button secondary" type="button">Elegir foto</button></div>
+      <p class="muted">Ingresa con el código QR de tu carné. Este acceso funciona para estudiantes y equipo institucional.</p>
+      <p id="login-scan-title" class="login-scan-title">Acceso con carné QR</p>
+      <div class="login-scan-actions"><button id="scan-login-barcode" class="button secondary" type="button">Escanear código QR</button><button id="choose-login-photo" class="button secondary" type="button">Elegir imagen del QR</button></div>
       <input id="login-photo" class="hidden" type="file" accept="image/*">
       <div id="login-scanner" class="registration-scanner hidden"><video id="login-video" autoplay playsinline muted></video></div>
-      <p id="login-scan-message" class="scanner-message" role="status">Escanea o selecciona una foto del código lineal de tu documento. Cualquier persona con una copia podrá entrar a esta cuenta.</p>
-      <input id="login-staff-document" type="hidden">
-      <p id="login-mode-warning" class="login-mode-warning hidden">Para proteger las cuentas de personal y administración, después de escanear también debes confirmar tu correo y contraseña.</p>
-      <label>Correo institucional<input name="correo" type="email" autocomplete="username" required></label>
-      <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
-      <button class="button primary full" type="submit">Iniciar sesión</button>
-      <button id="forgot-password" class="text-button" type="button">Olvidé mi contraseña</button>
-      <button id="switch-login-mode" class="text-button hidden" type="button">Cambiar a acceso de estudiante</button>
+      <p id="login-scan-message" class="scanner-message" role="status">Escanea el QR de tu carné o elige una imagen que lo contenga. Cualquier persona con una copia del QR podrá entrar a tu cuenta.</p>
+      <details class="legacy-login">
+        <summary>¿Ya tenías una cuenta? Acceso temporal para obtener tu carné</summary>
+        <form id="legacy-login-form">
+          <label>Correo electrónico<input name="correo" type="email" autocomplete="username" required></label>
+          <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+          <button class="button primary full" type="submit">Entrar y descargar mi carné</button>
+        </form>
+        <button id="forgot-password" class="text-button" type="button">Olvidé mi contraseña</button>
+      </details>
       <p id="login-message" class="message" role="status"></p>
-    </form>
+    </div>
   </main>
 
   <dialog id="registration-dialog">
     <form id="registration-form">
       <div class="institution-lockup dialog-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
-        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
-        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+        <img class="portal-mark" src="web/assets/images/portal-mark.svg" alt="">
+        <span class="institution-copy"><span class="institution-name dialog-institution-title">Gestión Institucional</span><strong class="institution-center">Servicio Nacional de Aprendizaje · SENA</strong><span class="institution-motto">CENTRO DE LA INDUSTRIA, LA EMPRESA Y LOS SERVICIOS</span></span>
       </div>
       <div class="dialog-heading"><div><p class="eyebrow">NUEVA CUENTA</p><h2 id="registration-title">Registrar como estudiante</h2></div><button id="close-registration" class="icon-button" type="button" aria-label="Cerrar">×</button></div>
       <p id="registration-intro" class="registration-intro"></p>
-      <div class="form-grid registration-fields">
+      <div id="registration-fields" class="form-grid registration-fields">
         <label class="registration-wide">Registrar como
-          <select id="registration-role" name="rol" required>
+          <select id="registration-role" name="rol" class="role-native-select" aria-hidden="true" tabindex="-1" required>
             <option value="estudiante">Estudiante</option>
             <option value="instructor">Instructor · requiere aprobación</option>
             <option value="portero">Portería · requiere aprobación</option>
           </select>
+          <span class="role-picker">
+            <button id="registration-role-trigger" class="role-picker-trigger" type="button" aria-label="Registrar como" aria-haspopup="listbox" aria-expanded="false" aria-controls="registration-role-options">
+              <span id="registration-role-value">Estudiante</span><span class="role-picker-chevron" aria-hidden="true"></span>
+            </button>
+            <span id="registration-role-options" class="role-picker-menu hidden" role="listbox" aria-label="Tipo de cuenta">
+              <button class="role-picker-option" type="button" role="option" data-value="estudiante" aria-selected="true"><span class="role-option-icon" aria-hidden="true">♙</span><span><strong>Estudiante</strong><small>Acceso al horario y progreso de asistencia</small></span><span class="role-option-check" aria-hidden="true">✓</span></button>
+              <button class="role-picker-option" type="button" role="option" data-value="instructor" aria-selected="false"><span class="role-option-icon" aria-hidden="true">✦</span><span><strong>Instructor</strong><small>Cuenta de personal · requiere aprobación</small></span><span class="role-option-check" aria-hidden="true">✓</span></button>
+              <button class="role-picker-option" type="button" role="option" data-value="portero" aria-selected="false"><span class="role-option-icon" aria-hidden="true">⌂</span><span><strong>Portería</strong><small>Cuenta de personal · requiere aprobación</small></span><span class="role-option-check" aria-hidden="true">✓</span></button>
+            </span>
+          </span>
         </label>
-        <label id="registration-document-field" class="document-field">Documento
-          <span class="qr-input-row"><input id="registration-document" name="documento" maxlength="30" autocomplete="off" required><button id="scan-registration-qr" class="button secondary" type="button">Usar cámara</button><button id="choose-registration-photo" class="button secondary" type="button">Elegir foto</button></span>
-        </label>
-        <input id="registration-photo" class="hidden" type="file" accept="image/*">
-        <label>Teléfono (opcional)<input name="telefono" maxlength="30" type="tel" autocomplete="tel"></label>
+        <label>Documento / cédula<input id="registration-document" name="documento" maxlength="30" autocomplete="off" required></label>
+        <label>Teléfono<input name="telefono" maxlength="30" type="tel" autocomplete="tel" required></label>
         <label>Nombres<input name="nombres" maxlength="100" autocomplete="given-name" required></label>
         <label>Apellidos<input name="apellidos" maxlength="100" autocomplete="family-name" required></label>
-        <label class="registration-wide">Correo electrónico<input name="correo" type="email" maxlength="190" autocomplete="email" required></label>
+        <label class="registration-wide">Correo electrónico (por ejemplo, Gmail)<input name="correo" type="email" maxlength="190" autocomplete="email" required></label>
         <label>Contraseña<input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
         <label>Confirmar contraseña<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label>
+        <div class="registration-wide photo-upload-field">
+          <label for="registration-photo">Foto para el carné <span class="optional-label">OPCIONAL</span></label>
+          <div class="photo-upload">
+            <input id="registration-photo" name="foto" class="hidden" type="file" accept="image/jpeg,image/png,image/webp">
+            <button id="choose-registration-photo" class="photo-choose-button" type="button"><span aria-hidden="true">＋</span> Elegir foto</button>
+            <span id="registration-photo-name" class="photo-file-name" aria-live="polite">JPG, PNG o WEBP · máximo 1 MB</span>
+            <button id="clear-registration-photo" class="photo-clear-button hidden" type="button" aria-label="Quitar foto">×</button>
+          </div>
+        </div>
       </div>
-      <p id="scanner-message" class="scanner-message" role="status">El escáner lee el número del documento impreso en el código de barras.</p>
-      <div id="registration-scanner" class="registration-scanner hidden"><video id="registration-video" autoplay playsinline muted></video></div>
+      <section id="registration-verification" class="registration-verification hidden" aria-labelledby="registration-verification-title">
+        <span class="verification-icon" aria-hidden="true">✉</span>
+        <h3 id="registration-verification-title">Confirma tu correo</h3>
+        <p>Escribe el código de seis dígitos que enviamos a <strong id="registration-verification-email"></strong>. Revisa también la carpeta de spam.</p>
+        <label for="registration-code">Código de verificación
+          <input id="registration-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000">
+        </label>
+        <button id="resend-registration-code" class="text-button" type="button" disabled>Podrás solicitar otro código en 60 s</button>
+      </section>
       <p id="registration-message" class="message" role="status"></p>
       <div class="dialog-actions"><button id="cancel-registration" class="button secondary" type="button">Cancelar</button><button id="submit-registration" class="button primary" type="submit">Crear cuenta</button></div>
     </form>
   </dialog>
 
+  <dialog id="card-dialog">
+    <div class="dialog-heading"><div><p class="eyebrow">TU CARNÉ DIGITAL</p><h2 id="card-dialog-title">Carné generado</h2></div><button id="close-card" class="icon-button" type="button" aria-label="Cerrar">×</button></div>
+    <p id="card-dialog-message" class="muted"></p>
+    <img id="card-preview" class="card-preview" alt="Vista previa del carné digital con código QR">
+    <div class="dialog-actions"><button id="download-card" class="button primary" type="button">Descargar carné PNG</button><button id="finish-card" class="button secondary" type="button">Listo</button></div>
+  </dialog>
+
   <div id="app-shell" class="app-shell hidden">
     <aside class="sidebar">
       <a class="institution-lockup app-brand" href="#" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
-        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
-        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+        <img class="portal-mark" src="web/assets/images/portal-mark.svg" alt="">
+        <span class="institution-copy"><span class="institution-name app-institution-title">Gestión Institucional</span><strong class="institution-center">Servicio Nacional de Aprendizaje · SENA</strong><span class="institution-motto">CENTRO DE LA INDUSTRIA, LA EMPRESA Y LOS SERVICIOS</span></span>
       </a>
       <div class="sidebar-label">MENÚ PRINCIPAL</div>
       <nav id="navigation"></nav>
@@ -135,6 +162,7 @@
         <div><p class="eyebrow" id="page-kicker">PANEL INSTITUCIONAL</p><h1 id="page-title">Resumen general</h1></div>
         <div class="topbar-actions">
           <div class="live-status"><span class="live-dot"></span> Actualización automática cada 8 s</div>
+          <button id="download-my-card" class="button secondary hidden" type="button">Mi carné digital</button>
           <button id="logout-top-button" class="button secondary logout-top-button" type="button">Cerrar sesión</button>
         </div>
       </header>
@@ -149,6 +177,17 @@
         <p class="refresh-note">El panel se actualiza cada 8 segundos.</p>
       </section>
       <section id="resource-view" class="view hidden">
+        <section id="student-attendance-overview" class="student-attendance-overview hidden" aria-label="Resumen de asistencia">
+          <div class="student-overview-heading"><div><p class="eyebrow">MI PROGRESO</p><h2>Asistencia a clases</h2><p id="student-attendance-caption">Tu resumen de asistencias registradas.</p></div><button id="student-view-history" class="button secondary" type="button">Ver mi historial</button></div>
+          <div id="student-attendance-stats" class="student-attendance-stats"></div>
+          <div class="attendance-history-card"><div class="attendance-ring" id="student-attendance-ring"><span id="student-attendance-rate">0%</span><small>asistencia</small></div><div><strong>Tu asistencia</strong><p id="student-attendance-detail">Aún no hay clases registradas.</p></div></div>
+        </section>
+        <div id="attendance-toolbar" class="attendance-toolbar hidden">
+          <label>Ambiente<select id="attendance-environment" aria-label="Seleccionar ambiente"></select></label>
+          <label>Ficha<select id="attendance-ficha" aria-label="Seleccionar ficha"></select></label>
+          <label>Fecha<input id="attendance-date" type="date" aria-label="Fecha de asistencia"></label>
+          <button id="attendance-refresh" class="button secondary" type="button">Actualizar lista</button>
+        </div>
         <div class="panel table-panel">
           <div class="panel-heading"><div><h2 id="table-title">Registros</h2><p id="table-description"></p></div><div class="table-actions"><select id="report-format" aria-label="Formato de reporte"><option value="csv">CSV</option><option value="xlsx">Excel</option><option value="pdf">PDF</option></select><button id="export-report" class="button secondary">Exportar</button><button id="add-record" class="button primary">＋ Nuevo registro</button></div></div>
           <div id="table-message" class="message"></div>
@@ -161,8 +200,8 @@
   <dialog id="record-dialog">
     <form id="record-form" method="dialog">
       <div class="institution-lockup dialog-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
-        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
-        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong><span class="institution-motto">FORMACIÓN · SERVICIO · OPORTUNIDADES</span></span>
+        <img class="portal-mark" src="web/assets/images/portal-mark.svg" alt="">
+        <span class="institution-copy"><span class="institution-name dialog-institution-title">Gestión Institucional</span><strong class="institution-center">Servicio Nacional de Aprendizaje · SENA</strong><span class="institution-motto">CENTRO DE LA INDUSTRIA, LA EMPRESA Y LOS SERVICIOS</span></span>
       </div>
       <div class="dialog-heading"><div><p class="eyebrow">GESTIÓN DE REGISTROS</p><h2 id="dialog-title">Nuevo registro</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
       <div id="record-fields" class="form-grid"></div>
@@ -170,19 +209,31 @@
       <div class="dialog-actions"><button class="button secondary" value="cancel">Cancelar</button><button id="save-record" class="button primary" value="submit">Guardar</button></div>
     </form>
   </dialog>
+  <dialog id="attendance-edit-dialog">
+    <form id="attendance-edit-form">
+      <div class="dialog-heading"><div><p class="eyebrow">REGISTRO DE ASISTENCIA</p><h2>Editar asistencia y motivo</h2></div><button id="close-attendance-edit" class="icon-button" type="button" aria-label="Cerrar">×</button></div>
+      <p id="attendance-edit-student" class="muted"></p>
+      <label>Estado<select name="estado" required><option value="presente">Asistió</option><option value="ausente">No asistió</option><option value="tarde">Llegó tarde</option><option value="permiso">Permiso</option></select></label>
+      <label>Motivo u observación<textarea name="observacion" maxlength="500" rows="3" placeholder="Describe brevemente el motivo de la falta, retraso o novedad."></textarea></label>
+      <p id="attendance-edit-message" class="message" role="status"></p>
+      <div class="dialog-actions"><button class="button secondary" id="cancel-attendance-edit" type="button">Cancelar</button><button class="button primary" type="submit">Guardar cambios</button></div>
+    </form>
+  </dialog>
   <dialog id="recovery-dialog">
     <form id="recovery-form" method="dialog">
       <div class="institution-lockup dialog-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
-        <img class="sena-mark" src="web/assets/images/sena-logo.png" alt="">
-        <span class="institution-copy"><span class="institution-name">Servicio Nacional de Aprendizaje</span><strong class="institution-center">SENA · Centro de la Industria, la Empresa y los Servicios</strong></span>
+        <img class="portal-mark" src="web/assets/images/portal-mark.svg" alt="">
+        <span class="institution-copy"><span class="institution-name dialog-institution-title">Gestión Institucional</span><strong class="institution-center">Servicio Nacional de Aprendizaje · SENA</strong></span>
       </div>
       <div class="dialog-heading"><div><p class="eyebrow">RECUPERACIÓN DE CUENTA</p><h2>Restablecer contraseña</h2></div><button class="icon-button" value="cancel" aria-label="Cerrar">×</button></div>
-      <label>Correo institucional<input name="correo" type="email" required></label>
+      <label>Correo electrónico registrado<input name="correo" type="email" autocomplete="email" required></label>
+      <p class="muted">Si el correo está asociado a una cuenta, enviaremos allí un enlace seguro que vence en 30 minutos.</p>
       <p id="recovery-message" class="message" role="status"></p>
       <div class="dialog-actions"><button class="button secondary" value="cancel">Cancelar</button><button class="button primary" value="submit">Enviar instrucciones</button></div>
     </form>
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
-  <script src="web/assets/js/app.js?v=20261018-sena-logo-v1"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="web/assets/js/app.js?v=20260618-email-verification-v1"></script>
 </body>
 </html>

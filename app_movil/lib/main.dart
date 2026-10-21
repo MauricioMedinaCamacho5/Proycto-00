@@ -96,12 +96,80 @@ class InstitutionMark extends StatelessWidget {
   final double size;
 
   @override
-  Widget build(BuildContext context) => Image.asset(
-        'assets/images/sena-logo.png',
-        width: size,
-        height: size,
-        fit: BoxFit.contain,
+  Widget build(BuildContext context) => CustomPaint(
+        size: Size.square(size),
+        painter: const _PortalMarkPainter(),
       );
+}
+
+class _PortalMarkPainter extends CustomPainter {
+  const _PortalMarkPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 100, size.height / 100);
+
+    final background = Paint()
+      ..shader = const LinearGradient(
+        colors: [Color(0xff19a965), Color(0xff075b37)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ).createShader(const Rect.fromLTWH(3, 3, 94, 94));
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(3, 3, 94, 94),
+        const Radius.circular(29),
+      ),
+      background,
+    );
+
+    final stem = Paint()
+      ..color = const Color(0xfff4fceb)
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(const Offset(50, 57), const Offset(50, 36), stem);
+
+    final leaves = Paint()..color = const Color(0xffb9f0b6);
+    final leftLeaf = Path()
+      ..moveTo(49, 38)
+      ..cubicTo(37, 37, 32, 29, 34, 20)
+      ..cubicTo(45, 21, 51, 27, 51, 37)
+      ..close();
+    canvas.drawPath(leftLeaf, Paint()..color = const Color(0xffddf7a8));
+    final rightLeaf = Path()
+      ..moveTo(52, 44)
+      ..cubicTo(53, 32, 61, 27, 71, 28)
+      ..cubicTo(70, 39, 64, 45, 53, 47)
+      ..close();
+    canvas.drawPath(rightLeaf, leaves);
+
+    final book = Path()
+      ..moveTo(22, 57)
+      ..cubicTo(33, 53, 43, 55, 50, 62)
+      ..cubicTo(57, 55, 67, 53, 78, 57)
+      ..lineTo(78, 79)
+      ..cubicTo(67, 75, 57, 77, 50, 84)
+      ..cubicTo(43, 77, 33, 75, 22, 79)
+      ..close();
+    canvas.drawPath(book, Paint()..color = const Color(0xfffffdf5));
+
+    final pageLine = Paint()
+      ..color = const Color(0xffc6e8cf)
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(const Offset(50, 63), const Offset(50, 82), pageLine);
+    final pageDetails = Paint()
+      ..color = const Color(0xffd5ebdd)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(const Offset(28, 63), const Offset(45, 65), pageDetails);
+    canvas.drawLine(const Offset(72, 63), const Offset(55, 65), pageDetails);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _PortalMarkPainter oldDelegate) => false;
 }
 
 class InstitutionBrand extends StatelessWidget {
@@ -164,21 +232,23 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final _api = ApiClient();
-  final _email = TextEditingController();
-  final _password = TextEditingController();
+  final _scannerController = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+    formats: const [BarcodeFormat.qrCode],
+  );
   bool _busy = false;
+  bool _scanning = false;
   String? _error;
 
-  Future<void> _login() async {
+  Future<void> _loginWithQr(String code) async {
+    if (_busy) return;
     setState(() {
       _busy = true;
+      _scanning = false;
       _error = null;
     });
     try {
-      final user = await _api.post('auth/login', {
-        'correo': _email.text.trim(),
-        'password': _password.text,
-      });
+      final user = await _api.post('auth/qr-login', {'codigo_qr': code});
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
@@ -195,8 +265,7 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   void dispose() {
-    _email.dispose();
-    _password.dispose();
+    _scannerController.dispose();
     super.dispose();
   }
 
@@ -215,36 +284,48 @@ class _LoginPageState extends State<LoginPage> {
                   children: [
                     const InstitutionBrand(),
                     const SizedBox(height: 26),
-                    Text('Acceso a tu cuenta',
+                    Text('Acceso con carné QR',
                         style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 18),
-                    TextField(
-                      controller: _email,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: 'Correo institucional',
-                        border: OutlineInputBorder(),
-                      ),
+                    const Text(
+                      'Escanea el QR de tu carné para ingresar. Cualquier persona con una copia puede acceder a tu cuenta.',
                     ),
                     const SizedBox(height: 14),
-                    TextField(
-                      controller: _password,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Contraseña',
-                        border: OutlineInputBorder(),
+                    if (_scanning)
+                      SizedBox(
+                        height: 260,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: MobileScanner(
+                            controller: _scannerController,
+                            onDetect: (capture) {
+                              if (capture.barcodes.isEmpty) return;
+                              final code = capture.barcodes.first.rawValue;
+                              if (code != null && code.isNotEmpty) {
+                                _loginWithQr(code);
+                              }
+                            },
+                          ),
+                        ),
                       ),
-                      onSubmitted: (_) => _login(),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: _busy
+                          ? null
+                          : () => setState(() => _scanning = !_scanning),
+                      icon: Icon(_scanning
+                          ? Icons.close
+                          : Icons.qr_code_scanner),
+                      label: Text(_scanning ? 'Cerrar cámara' : 'Escanear QR'),
                     ),
                     if (_error != null) ...[
                       const SizedBox(height: 12),
                       Text(_error!, style: const TextStyle(color: Colors.red)),
                     ],
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: _busy ? null : _login,
-                      child: Text(_busy ? 'Ingresando…' : 'Iniciar sesión'),
-                    ),
+                    if (_busy) ...[
+                      const SizedBox(height: 12),
+                      const Center(child: CircularProgressIndicator()),
+                    ],
                   ],
                 ),
               ),
