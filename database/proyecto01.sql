@@ -6,7 +6,8 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS verificaciones_correo, recuperacion_password, auditoria, notificaciones,
   permisos_temporales, prestamos, movimientos_equipos, equipos, visitantes,
   accesos, novedades, asistencias, reservas, horarios, mantenimientos, solicitudes_registro,
-  ambientes, fichas_usuarios, fichas, bloqueos, carnets, usuarios, roles;
+  solicitudes_ficha, ambientes, fichas_usuarios, fichas_instructores, fichas,
+  bloqueos, carnets, usuarios, roles;
 SET FOREIGN_KEY_CHECKS = 1;
 
 CREATE TABLE roles (
@@ -67,11 +68,14 @@ CREATE TABLE bloqueos (
 
 CREATE TABLE fichas (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  codigo VARCHAR(30) NOT NULL UNIQUE,
+  codigo CHAR(7) CHARACTER SET ascii COLLATE ascii_bin NOT NULL UNIQUE,
   nombre VARCHAR(150) NOT NULL,
+  programa VARCHAR(150) NOT NULL DEFAULT '',
+  trimestre TINYINT UNSIGNED NULL,
   fecha_inicio DATE NULL,
   fecha_fin DATE NULL,
-  estado ENUM('activa','finalizada','suspendida') NOT NULL DEFAULT 'activa'
+  estado ENUM('activa','finalizada','suspendida') NOT NULL DEFAULT 'activa',
+  CONSTRAINT chk_fichas_codigo CHECK (codigo REGEXP '^[0-9]{7}$')
 ) ENGINE=InnoDB;
 
 CREATE TABLE fichas_usuarios (
@@ -82,6 +86,17 @@ CREATE TABLE fichas_usuarios (
   UNIQUE KEY uq_ficha_usuario (ficha_id, usuario_id),
   CONSTRAINT fk_ficha_usuarios_ficha FOREIGN KEY (ficha_id) REFERENCES fichas(id) ON DELETE CASCADE,
   CONSTRAINT fk_ficha_usuarios_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE fichas_instructores (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  ficha_id BIGINT UNSIGNED NOT NULL,
+  instructor_id BIGINT UNSIGNED NOT NULL,
+  asignado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_ficha_instructor (ficha_id, instructor_id),
+  INDEX idx_fichas_instructores_instructor (instructor_id),
+  CONSTRAINT fk_fichas_instructores_ficha FOREIGN KEY (ficha_id) REFERENCES fichas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_fichas_instructores_instructor FOREIGN KEY (instructor_id) REFERENCES usuarios(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE ambientes (
@@ -149,7 +164,7 @@ CREATE TABLE asistencias (
   registrado_por BIGINT UNSIGNED NOT NULL,
   observacion VARCHAR(500) NULL,
   registrado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_asistencia_usuario_ficha_fecha (usuario_id, ficha_id, fecha),
+  UNIQUE KEY uq_asistencia_sesion (usuario_id, ficha_id, fecha, horario_id),
   CONSTRAINT fk_asistencias_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
   CONSTRAINT fk_asistencias_ficha FOREIGN KEY (ficha_id) REFERENCES fichas(id),
   CONSTRAINT fk_asistencias_horario FOREIGN KEY (horario_id) REFERENCES horarios(id) ON DELETE SET NULL,
@@ -316,12 +331,8 @@ INSERT INTO carnets (usuario_id, codigo_qr) VALUES
   (2,'a4b2235a-6dd2-43ea-8d39-926056df1002'),
   (3,'a4b2235a-6dd2-43ea-8d39-926056df1003'),
   (4,'a4b2235a-6dd2-43ea-8d39-926056df1004');
-INSERT INTO fichas (id, codigo, nombre, estado) VALUES (1,'FIC-2026-01','Tecnico en Sistemas','activa');
-INSERT INTO fichas_usuarios (ficha_id, usuario_id) VALUES (1,3);
 INSERT INTO ambientes (id, codigo, nombre, ubicacion, capacidad, estado) VALUES
   (1,'A-101','Laboratorio de Sistemas','Bloque A, primer piso',30,'disponible'),
   (2,'B-204','Aula de Formacion','Bloque B, segundo piso',25,'disponible');
-INSERT INTO horarios (ficha_id,ambiente_id,instructor_id,dia_semana,hora_inicio,hora_fin,asignatura)
-VALUES (1,1,2,1,'08:00:00','12:00:00','Fundamentos de programacion');
 INSERT INTO equipos (serial, codigo_qr, nombre, categoria, estado, ubicacion) VALUES
   ('DEMO-LAP-001','7d51d50b-3792-4876-b3e3-b542106d4101','Portatil de demostracion','Computo','disponible','Laboratorio A-101');

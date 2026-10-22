@@ -42,15 +42,107 @@ function audit(PDO $db, ?int $actor, string $action, string $entity, ?int $id = 
     $stmt->execute([$actor, $action, $entity, $id, $detail ? json_encode($detail, JSON_UNESCAPED_UNICODE) : null]);
 }
 
-function notifyAttendance(PDO $db, int $studentId, string $status, string $date, ?string $observation): void
+function notifyUsers(PDO $db, array $userIds, string $title, string $message): void
 {
-    $labels = ['presente' => 'Asistió', 'ausente' => 'Faltó', 'tarde' => 'Llegó tarde', 'permiso' => 'Permiso'];
-    $message = 'Tu asistencia del ' . date('d/m/Y', strtotime($date)) . ' fue registrada como: ' . ($labels[$status] ?? $status) . '.';
-    if ($observation !== null && trim($observation) !== '') {
-        $message .= ' Motivo u observación: ' . trim($observation);
+    $insert = $db->prepare('INSERT INTO notificaciones (usuario_id, titulo, mensaje) VALUES (?, ?, ?)');
+    foreach (array_unique(array_map('intval', $userIds)) as $userId) {
+        if ($userId > 0) {
+            $insert->execute([$userId, $title, $message]);
+        }
     }
-    $stmt = $db->prepare('INSERT INTO notificaciones (usuario_id, titulo, mensaje) VALUES (?, ?, ?)');
-    $stmt->execute([$studentId, 'Actualización de asistencia', $message]);
+}
+
+function formationRecipientIds(PDO $db, int $fichaId, array $additionalUserIds = []): array
+{
+    $staff = $db->prepare("SELECT u.id FROM usuarios u
+        JOIN roles r ON r.id = u.rol_id
+        WHERE u.activo = 1 AND (
+            r.nombre = 'administrador'
+            OR r.nombre = 'instructor' AND EXISTS (
+                SELECT 1 FROM fichas_instructores fi
+                WHERE fi.ficha_id = ? AND fi.instructor_id = u.id
+            )
+        )");
+    $staff->execute([$fichaId]);
+    $students = $db->prepare("SELECT fu.usuario_id FROM fichas_usuarios fu
+        JOIN usuarios u ON u.id = fu.usuario_id AND u.activo = 1
+        WHERE fu.ficha_id = ?");
+    $students->execute([$fichaId]);
+    return array_merge($staff->fetchAll(PDO::FETCH_COLUMN), $students->fetchAll(PDO::FETCH_COLUMN), $additionalUserIds);
+}
+
+function notifyAttendance(PDO $db, int $studentId, int $fichaId, ?int $scheduleId, string $status, string $date, ?string $observation): void
+{
+    $stmt = $db->prepare("SELECT f.codigo, f.nombre, f.programa, f.trimestre,
+            h.asignatura, h.hora_inicio, h.hora_fin, a.nombre AS ambiente,
+            CONCAT(i.nombres, ' ', i.apellidos) AS instructor,
+            CONCAT(s.nombres, ' ', s.apellidos) AS estudiante
+        FROM fichas f
+        JOIN usuarios s ON s.id = ?
+        LEFT JOIN horarios h ON h.id = ? AND h.ficha_id = f.id
+        LEFT JOIN ambientes a ON a.id = h.ambiente_id
+        LEFT JOIN usuarios i ON i.id = h.instructor_id
+        WHERE f.id = ?");
+    $stmt->execute([$studentId, $scheduleId, $fichaId]);
+    $context = $stmt->fetch();
+    if (!$context) {
+        throw new RuntimeException('No se pudo cargar el contexto de la asistencia.');
+    }
+    $message = 'Motivo: ' . ($observation !== null && trim($observation) !== ''
+        ? trim($observation)
+        : 'No se registró una observación.');
+    $staff = $db->prepare("SELECT u.id FROM usuarios u
+        JOIN roles r ON r.id = u.rol_id
+        WHERE u.activo = 1 AND (
+            r.nombre = 'administrador'
+            OR r.nombre = 'instructor' AND EXISTS (
+                SELECT 1 FROM fichas_instructores fi
+                WHERE fi.ficha_id = ? AND fi.instructor_id = u.id
+            )
+        )");
+    $staff->execute([$fichaId]);
+    notifyUsers($db, array_merge([$studentId], $staff->fetchAll(PDO::FETCH_COLUMN)), 'Actualización de asistencia · ' . $context['estudiante'], $message);
+}
+
+function notifyFormationChange(PDO $db, string $table, int $recordId): void
+{
+    if ($table === 'fichas') {
+        $stmt = $db->prepare('SELECT id, codigo, nombre, programa, trimestre FROM fichas WHERE id = ?');
+        $stmt->execute([$recordId]);
+        $ficha = $stmt->fetch();
+        if (!$ficha) {
+            return;
+        }
+        $message = 'Ficha ' . $ficha['codigo'] . ' · ' . $ficha['nombre']
+            . "\nPrograma: " . ($ficha['programa'] ?: 'Sin programa')
+            . "\nTrimestre: " . ($ficha['trimestre'] ?: 'Sin trimestre');
+        notifyUsers($db, formationRecipientIds($db, (int)$ficha['id']), 'Actualización de ficha y programa', $message);
+        return;
+    }
+    if ($table === 'horarios') {
+        $stmt = $db->prepare("SELECT h.ficha_id, h.asignatura, h.dia_semana, h.hora_inicio, h.hora_fin,
+                f.codigo, f.nombre, f.programa, f.trimestre, a.nombre AS ambiente,
+                CONCAT(u.nombres, ' ', u.apellidos) AS instructor
+            FROM horarios h JOIN fichas f ON f.id = h.ficha_id
+            JOIN ambientes a ON a.id = h.ambiente_id
+            JOIN usuarios u ON u.id = h.instructor_id
+            WHERE h.id = ?");
+        $stmt->execute([$recordId]);
+        $schedule = $stmt->fetch();
+        if (!$schedule) {
+            return;
+        }
+        $days = [1=>'lunes',2=>'martes',3=>'miércoles',4=>'jueves',5=>'viernes',6=>'sábado',7=>'domingo'];
+        $message = 'Asignatura: ' . $schedule['asignatura']
+            . "\nDía: " . ($days[(int)$schedule['dia_semana']] ?? 'Sin día')
+            . "\nHorario: " . substr($schedule['hora_inicio'], 0, 5) . ' a ' . substr($schedule['hora_fin'], 0, 5)
+            . "\nAmbiente: " . $schedule['ambiente']
+            . "\nInstructor: " . $schedule['instructor']
+            . "\nFicha: " . $schedule['codigo'] . ' · ' . $schedule['nombre']
+            . "\nPrograma: " . ($schedule['programa'] ?: 'Sin programa')
+            . "\nTrimestre: " . ($schedule['trimestre'] ?: 'Sin trimestre');
+        notifyUsers($db, formationRecipientIds($db, (int)$schedule['ficha_id']), 'Actualización de horario', $message);
+    }
 }
 
 function uuid4(): string
@@ -198,6 +290,45 @@ function sendRows(PDO $db, string $table, array $columns, ?int $id = null, ?stri
     respond($id === null ? ['data' => $rows] : ['data' => $rows[0]]);
 }
 
+function validateFichaInput(array &$data, ?array $current = null): void
+{
+    $allowed = ['codigo','programa','fecha_inicio','fecha_fin'];
+    $unknown = array_diff(array_keys($data), $allowed);
+    if ($unknown) {
+        respond(['error' => 'Campos no permitidos para una ficha: ' . implode(', ', $unknown)], 422);
+    }
+    $values = array_merge($current ?? [], $data);
+    if ($current === null && array_diff($allowed, array_keys($data))) {
+        respond(['error' => 'Completa número, programa y fechas de la ficha.'], 422);
+    }
+    if (array_key_exists('codigo', $data) && !preg_match('/^\d{7}$/', (string)$data['codigo'])) {
+        respond(['error' => 'El número de ficha debe tener exactamente 7 dígitos numéricos.'], 422);
+    }
+    if (array_key_exists('programa', $data) &&
+        (!is_string($data['programa']) || trim($data['programa']) === '' || mb_strlen(trim($data['programa'])) > 150)) {
+        respond(['error' => 'Escribe el nombre del programa (máximo 150 caracteres).'], 422);
+    }
+    foreach (['fecha_inicio','fecha_fin'] as $field) {
+        if (array_key_exists($field, $data)) {
+            $date = is_string($data[$field]) ? DateTime::createFromFormat('!Y-m-d', $data[$field]) : false;
+            if (!$date || $date->format('Y-m-d') !== $data[$field]) {
+                respond(['error' => 'Las fechas deben ser válidas y usar el formato YYYY-MM-DD.'], 422);
+            }
+        }
+    }
+    $start = $values['fecha_inicio'] ?? null;
+    $end = $values['fecha_fin'] ?? null;
+    if ($start && $end && $start > $end) {
+        respond(['error' => 'La fecha de inicio debe ser anterior o igual a la fecha de fin.'], 422);
+    }
+    if (array_key_exists('programa', $data)) {
+        $data['nombre'] = trim($data['programa']);
+    }
+    if ($current === null) {
+        $data['trimestre'] = null;
+    }
+}
+
 function saveResource(PDO $db, string $table, array $fields, array $input, ?int $id, ?array $user): void
 {
     $unknown = array_diff(array_keys($input), $fields);
@@ -228,6 +359,27 @@ function saveResource(PDO $db, string $table, array $fields, array $input, ?int 
     $db->beginTransaction();
     try {
         $checkValues = $values;
+        $currentAttendance = null;
+        $currentEnrollment = null;
+        if ($id !== null && $table === 'asistencias') {
+            $existing = $db->prepare('SELECT usuario_id, ficha_id, horario_id, fecha, estado, observacion FROM asistencias WHERE id = ?');
+            $existing->execute([$id]);
+            $currentAttendance = $existing->fetch();
+            if (!$currentAttendance) {
+                $db->rollBack();
+                respond(['error' => 'Registro no encontrado.'], 404);
+            }
+            $checkValues = array_merge($currentAttendance, $values);
+        }
+        if ($id !== null && $table === 'fichas_usuarios') {
+            $existing = $db->prepare('SELECT ficha_id, usuario_id FROM fichas_usuarios WHERE id = ?');
+            $existing->execute([$id]);
+            $currentEnrollment = $existing->fetch();
+            if (!$currentEnrollment) {
+                $db->rollBack();
+                respond(['error' => 'Registro no encontrado.'], 404);
+            }
+        }
         if ($id !== null && in_array($table, ['reservas','horarios'], true)) {
             $existing = $db->prepare("SELECT * FROM {$table} WHERE id = ?");
             $existing->execute([$id]);
@@ -318,6 +470,47 @@ function saveResource(PDO $db, string $table, array $fields, array $input, ?int 
                     (SELECT 1 FROM bloqueos WHERE usuario_id = (SELECT usuario_id FROM bloqueos WHERE id = ?) AND desbloqueado_en IS NULL)
                     WHERE id = (SELECT usuario_id FROM bloqueos WHERE id = ?)')->execute([$id, $id]);
             }
+            if ($table === 'asistencias' &&
+                ($currentAttendance['usuario_id'] != $checkValues['usuario_id'] ||
+                    $currentAttendance['ficha_id'] != $checkValues['ficha_id'] ||
+                    $currentAttendance['horario_id'] != $checkValues['horario_id'] ||
+                    $currentAttendance['fecha'] != $checkValues['fecha'] ||
+                    $currentAttendance['estado'] != $checkValues['estado'] ||
+                    $currentAttendance['observacion'] != $checkValues['observacion'])) {
+                notifyAttendance(
+                    $db,
+                    (int)$checkValues['usuario_id'],
+                    (int)$checkValues['ficha_id'],
+                    $checkValues['horario_id'] === null ? null : (int)$checkValues['horario_id'],
+                    (string)$checkValues['estado'],
+                    (string)$checkValues['fecha'],
+                    $checkValues['observacion'] === null ? null : (string)$checkValues['observacion']
+                );
+            }
+        }
+        if (in_array($table, ['fichas','horarios'], true)) {
+            notifyFormationChange($db, $table, $id);
+        } elseif ($table === 'fichas_usuarios') {
+            $enrollment = $db->prepare("SELECT fu.ficha_id, fu.usuario_id, f.codigo, f.nombre, f.programa, f.trimestre,
+                    CONCAT(u.nombres, ' ', u.apellidos) AS estudiante
+                FROM fichas_usuarios fu JOIN fichas f ON f.id = fu.ficha_id
+                JOIN usuarios u ON u.id = fu.usuario_id WHERE fu.id = ?");
+            $enrollment->execute([$id]);
+            $record = $enrollment->fetch();
+            if ($record && (!$currentEnrollment ||
+                (int)$currentEnrollment['ficha_id'] !== (int)$record['ficha_id'] ||
+                (int)$currentEnrollment['usuario_id'] !== (int)$record['usuario_id'])) {
+                $staff = $db->query("SELECT u.id FROM usuarios u JOIN roles r ON r.id = u.rol_id
+                    WHERE u.activo = 1 AND r.nombre IN ('administrador','instructor')")->fetchAll(PDO::FETCH_COLUMN);
+                $message = $record['estudiante'] . ' fue asignado a la ficha ' . $record['codigo'] . ' · ' . $record['nombre']
+                    . "\nPrograma: " . ($record['programa'] ?: 'Sin programa')
+                    . "\nTrimestre: " . ($record['trimestre'] ?: 'Sin trimestre');
+                $affectedStudents = [(int)$record['usuario_id']];
+                if ($currentEnrollment) {
+                    $affectedStudents[] = (int)$currentEnrollment['usuario_id'];
+                }
+                notifyUsers($db, array_merge($staff, $affectedStudents), 'Actualización de asignación de ficha', $message);
+            }
         }
         $db->commit();
         respond(['data' => ['id' => $id]], $id && $_SERVER['REQUEST_METHOD'] === 'POST' ? 201 : 200);
@@ -342,9 +535,13 @@ try {
     if ($route === 'health' && $method === 'GET') {
         respond(['status' => 'ok', 'service' => 'gestion-institucional']);
     }
+    if ($route === 'auth' && ($parts[1] ?? '') === 'registration-options' && $method === 'GET') {
+        $fichas = $db->query("SELECT id, codigo, nombre, programa, trimestre FROM fichas
+            WHERE fecha_inicio <= CURRENT_DATE() AND fecha_fin >= CURRENT_DATE() ORDER BY codigo")->fetchAll();
+        respond(['data' => ['fichas' => $fichas]]);
+    }
     if ($route === 'auth' && ($parts[1] ?? '') === 'register' && !isset($parts[2]) && $method === 'POST') {
         $data = body();
-        $db->exec('DELETE FROM verificaciones_correo WHERE vence_en <= NOW()');
         foreach (['documento','nombres','apellidos','correo','password','telefono'] as $field) {
             if (!isset($data[$field]) || !is_string($data[$field])) {
                 respond(['error' => 'Faltan datos obligatorios o tienen un formato incorrecto.'], 422);
@@ -376,7 +573,15 @@ try {
                 respond(['error' => 'La foto debe ser JPG, PNG o WEBP y no superar 1 MB.'], 422);
             }
             $photoBytes = base64_decode($photoMatch[2], true);
-            $photoInfo = $photoBytes === false ? false : finfo_buffer(new finfo(FILEINFO_MIME_TYPE), $photoBytes);
+            $fileInfo = finfo_open(FILEINFO_MIME_TYPE);
+            if ($fileInfo === false) {
+                throw new RuntimeException('No se pudo validar el formato de la foto.');
+            }
+            try {
+                $photoInfo = $photoBytes === false ? false : finfo_buffer($fileInfo, $photoBytes);
+            } finally {
+                finfo_close($fileInfo);
+            }
             $allowedPhotoTypes = ['image/jpeg', 'image/png', 'image/webp'];
             if ($photoBytes === false || strlen($photoBytes) > 1048576 || !in_array($photoInfo, $allowedPhotoTypes, true)) {
                 respond(['error' => 'La foto no es una imagen JPG, PNG o WEBP válida, o supera 1 MB.'], 422);
@@ -387,132 +592,68 @@ try {
         if (!in_array($requestedRole, ['estudiante','instructor','portero'], true)) {
             respond(['error' => 'El registro publico solo admite estudiantes, instructores o porteria.'], 422);
         }
+        $fichaId = null;
+        if ($requestedRole === 'estudiante') {
+            if (!isset($data['ficha_id']) || !ctype_digit((string)$data['ficha_id']) || (int)$data['ficha_id'] < 1) {
+                respond(['error' => 'Selecciona una ficha activa para completar el registro.'], 422);
+            }
+            $fichaId = (int)$data['ficha_id'];
+        } elseif (isset($data['ficha_id'])) {
+            respond(['error' => 'Solo los estudiantes pueden seleccionar una ficha al registrarse.'], 422);
+        }
         $duplicate = $db->prepare('SELECT 1 FROM usuarios WHERE documento = ? OR correo = ? LIMIT 1');
         $duplicate->execute([$registration['documento'], $registration['correo']]);
         if ($duplicate->fetchColumn()) {
             respond(['error' => 'Ya existe una cuenta con ese documento o correo. Inicie sesion o use la recuperacion de contrasena.'], 409);
         }
-        $pending = $db->prepare('SELECT creado_en FROM verificaciones_correo WHERE correo = ? LIMIT 1');
-        $pending->execute([$registration['correo']]);
-        $pendingCreated = $pending->fetchColumn();
-        if ($pendingCreated && strtotime((string)$pendingCreated) > time() - 60) {
-            respond(['error' => 'Ya enviamos un código a este correo. Espera un minuto antes de pedir otro.'], 429);
-        }
         $role = $db->prepare('SELECT id FROM roles WHERE nombre = ? LIMIT 1');
         $role->execute([$requestedRole]);
-        if (!$role->fetchColumn()) {
+        $roleId = $role->fetchColumn();
+        if (!$roleId) {
             respond(['error' => 'No se encontro el rol solicitado. Contacte al administrador.'], 500);
-        }
-        try {
-            createSystemMailer();
-        } catch (RuntimeException $exception) {
-            respond(['error' => $exception->getMessage()], 503);
-        }
-        $verificationCode = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $registration['rol'] = $requestedRole;
-        $registration['password_hash'] = password_hash($password, PASSWORD_DEFAULT);
-        $payload = json_encode($registration, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        if ($payload === false) {
-            respond(['error' => 'No se pudo preparar la verificación del correo.'], 500);
-        }
-        $db->prepare("INSERT INTO verificaciones_correo (correo,codigo_hash,datos,vence_en,intentos,creado_en)
-            VALUES (?,?,?,DATE_ADD(NOW(), INTERVAL 15 MINUTE),0,NOW())
-            ON DUPLICATE KEY UPDATE codigo_hash = VALUES(codigo_hash), datos = VALUES(datos),
-                vence_en = VALUES(vence_en), intentos = 0, creado_en = NOW()")
-            ->execute([$registration['correo'], password_hash($verificationCode, PASSWORD_DEFAULT), $payload]);
-        $safeEmail = htmlspecialchars($registration['correo'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        try {
-            sendSystemEmail(
-                $registration['correo'],
-                'Confirma tu correo · Gestión Institucional',
-                '<div style="font-family:Arial,sans-serif;color:#183528;max-width:560px;margin:auto;padding:28px;border:1px solid #dce9dc;border-radius:20px"><h2 style="color:#075b37">Confirma tu correo</h2><p>Usa este código para verificar <strong>' . $safeEmail . '</strong> y completar tu registro:</p><p style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#087c45">' . $verificationCode . '</p><p>El código vence en 15 minutos. Si no solicitaste esta cuenta, ignora este mensaje.</p></div>',
-                "Confirma tu correo para completar el registro: {$verificationCode}. El código vence en 15 minutos."
-            );
-        } catch (\PHPMailer\PHPMailer\Exception $exception) {
-            $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$registration['correo']]);
-            error_log('[gestion-institucional] Registration email send failed: ' . $exception->getMessage());
-            respond(['error' => 'No se pudo enviar el código. Revisa la configuración SMTP de Gmail e inténtalo de nuevo.'], 503);
-        }
-        respond(['data' => [
-            'verification_required' => true,
-            'correo' => $registration['correo'],
-            'message' => 'Enviamos un código de seis dígitos a tu correo. Debes confirmarlo para terminar el registro.',
-        ]], 202);
-    }
-    if ($route === 'auth' && ($parts[1] ?? '') === 'register' && ($parts[2] ?? '') === 'verify' && $method === 'POST') {
-        $data = body();
-        $email = is_string($data['correo'] ?? null) ? trim($data['correo']) : '';
-        $code = is_string($data['codigo'] ?? null) ? trim($data['codigo']) : '';
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^\d{6}$/', $code)) {
-            respond(['error' => 'Escribe el correo y el código de seis dígitos que recibiste.'], 422);
         }
         $db->beginTransaction();
         try {
-            $pendingStmt = $db->prepare('SELECT codigo_hash, datos, vence_en, intentos FROM verificaciones_correo WHERE correo = ? FOR UPDATE');
-            $pendingStmt->execute([$email]);
-            $pending = $pendingStmt->fetch();
-            if (!$pending || strtotime((string)$pending['vence_en']) <= time()) {
-                $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$email]);
-                $db->commit();
-                respond(['error' => 'El código venció o no existe. Vuelve a solicitar el envío desde el formulario de registro.'], 410);
+            $student = $requestedRole === 'estudiante';
+            if ($student) {
+                $activeFicha = $db->prepare("SELECT id FROM fichas
+                    WHERE id = ? AND fecha_inicio <= CURRENT_DATE() AND fecha_fin >= CURRENT_DATE() FOR UPDATE");
+                $activeFicha->execute([$fichaId]);
+                if (!$activeFicha->fetchColumn()) {
+                    $db->rollBack();
+                    respond(['error' => 'La ficha seleccionada ya no está disponible. Actualiza la página y elige una ficha activa.'], 422);
+                }
             }
-            if ((int)$pending['intentos'] >= 5) {
-                $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$email]);
-                $db->commit();
-                respond(['error' => 'Se superó el número de intentos. Vuelve a solicitar un código nuevo.'], 429);
-            }
-            if (!password_verify($code, $pending['codigo_hash'])) {
-                $db->prepare('UPDATE verificaciones_correo SET intentos = intentos + 1 WHERE correo = ?')->execute([$email]);
-                $db->commit();
-                respond(['error' => 'El código no coincide. Revisa el mensaje y vuelve a intentarlo.'], 422);
-            }
-            $registration = json_decode($pending['datos'], true);
-            if (!is_array($registration) || !isset($registration['rol'], $registration['password_hash'])) {
-                throw new RuntimeException('Los datos de registro pendientes no son válidos.');
-            }
-            $duplicate = $db->prepare('SELECT 1 FROM usuarios WHERE documento = ? OR correo = ? LIMIT 1');
-            $duplicate->execute([$registration['documento'], $email]);
-            if ($duplicate->fetchColumn()) {
-                $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$email]);
-                $db->commit();
-                respond(['error' => 'Ya existe una cuenta con ese documento o correo. Inicia sesión o recupera tu contraseña.'], 409);
-            }
-            $role = $db->prepare('SELECT id FROM roles WHERE nombre = ? LIMIT 1');
-            $role->execute([$registration['rol']]);
-            $roleId = $role->fetchColumn();
-            if (!$roleId) {
-                throw new RuntimeException('No se encontró el rol solicitado.');
-            }
-            $student = $registration['rol'] === 'estudiante';
+            $passwordHash = password_hash($password, PASSWORD_DEFAULT);
             $insert = $db->prepare('INSERT INTO usuarios (rol_id,documento,nombres,apellidos,correo,password_hash,telefono,foto,activo) VALUES (?,?,?,?,?,?,?,?,?)');
             $insert->execute([
                 (int)$roleId, $registration['documento'], $registration['nombres'], $registration['apellidos'],
-                $email, $registration['password_hash'], $registration['telefono'], $registration['foto'], $student ? 1 : 0,
+                $registration['correo'], $passwordHash, $registration['telefono'], $registration['foto'], $student ? 1 : 0,
             ]);
             $userId = (int)$db->lastInsertId();
             $qrCode = uuid4();
             $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$userId, $qrCode]);
             if ($student) {
-                audit($db, $userId, 'registro_publico_verificado', 'usuarios', $userId, ['rol' => $registration['rol']]);
+                $db->prepare('INSERT INTO fichas_usuarios (ficha_id,usuario_id) VALUES (?,?)')->execute([$fichaId, $userId]);
+                audit($db, $userId, 'registro_publico', 'usuarios', $userId, ['rol' => $requestedRole]);
             } else {
                 $db->prepare('INSERT INTO solicitudes_registro (usuario_id) VALUES (?)')->execute([$userId]);
-                audit($db, $userId, 'solicitar_registro_personal_verificado', 'usuarios', $userId, ['rol' => $registration['rol']]);
+                audit($db, $userId, 'solicitar_registro_personal', 'usuarios', $userId, ['rol' => $requestedRole]);
             }
-            $db->prepare('DELETE FROM verificaciones_correo WHERE correo = ?')->execute([$email]);
             $db->commit();
 
             $card = [
                 'codigo_qr' => $qrCode,
                 'usuario' => [
                     'documento' => $registration['documento'], 'nombres' => $registration['nombres'],
-                    'apellidos' => $registration['apellidos'], 'correo' => $email, 'telefono' => $registration['telefono'],
-                    'rol' => $registration['rol'], 'foto' => $registration['foto'],
+                    'apellidos' => $registration['apellidos'], 'correo' => $registration['correo'], 'telefono' => $registration['telefono'],
+                    'rol' => $requestedRole, 'foto' => $registration['foto'],
                 ],
             ];
             if (!$student) {
                 respond(['data' => [
                     'pending_approval' => true,
-                    'message' => 'Correo verificado. Un administrador revisará tu solicitud antes de activar la cuenta.',
+                    'message' => 'Tu solicitud fue enviada. Un administrador revisará tu cuenta antes de activarla.',
                     'card' => $card,
                 ]], 201);
             }
@@ -522,7 +663,7 @@ try {
             $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
             respond(['data' => [
                 'user' => currentUser($db),
-                'message' => 'Correo verificado y cuenta de estudiante creada correctamente.',
+                'message' => 'Cuenta de estudiante creada correctamente.',
                 'card' => $card,
             ]], 201);
         } catch (Throwable $exception) {
@@ -691,26 +832,33 @@ try {
         try {
             createSystemMailer();
         } catch (RuntimeException $exception) {
-            respond(['error' => $exception->getMessage()], 503);
+            error_log('[gestion-institucional] Password recovery is not configured: ' . $exception->getMessage());
+            respond(['error' => 'La recuperación por correo no está disponible. Configura PHPMailer y SMTP de Gmail o Hotmail.'], 503);
         }
-        $stmt = $db->prepare('SELECT id, correo FROM usuarios WHERE correo = ? AND activo = 1');
+        $stmt = $db->prepare('SELECT u.id, u.correo, r.nombre AS rol FROM usuarios u JOIN roles r ON r.id = u.rol_id WHERE u.correo = ? AND u.activo = 1');
         $stmt->execute([$data['correo'] ?? '']);
         $account = $stmt->fetch();
         if ($account) {
             $token = createRecoveryToken($db, (int)$account['id']);
             $baseUrl = rtrim(getenv('APP_URL') ?: 'http://localhost/gestion', '/');
             $link = $baseUrl . '/restablecer.html?token=' . urlencode($token);
+            $roleLabel = match ($account['rol']) {
+                'administrador' => 'administrador',
+                'estudiante' => 'estudiante',
+                'instructor', 'portero' => 'equipo institucional',
+                default => 'usuario',
+            };
             try {
                 sendSystemEmail(
                     $account['correo'],
-                    'Recuperación de contraseña · Gestión Institucional',
-                    '<div style="font-family:Arial,sans-serif;color:#183528;max-width:560px;margin:auto;padding:28px;border:1px solid #dce9dc;border-radius:20px"><h2 style="color:#075b37">Recupera tu contraseña</h2><p>Recibimos una solicitud para cambiar la contraseña de tu cuenta.</p><p><a style="display:inline-block;padding:13px 20px;border-radius:999px;background:#087c45;color:#fff;text-decoration:none;font-weight:bold" href="' . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">Crear una contraseña nueva</a></p><p>El enlace vence en 30 minutos y solo puede usarse una vez. Si no solicitaste este cambio, ignora este mensaje.</p></div>',
-                    "Usa este enlace para restablecer tu contraseña (vence en 30 minutos): {$link}"
+                    'Recuperar contraseña como ' . $roleLabel . ' · Gestión Institucional',
+                    '<div style="font-family:Arial,sans-serif;color:#183528;max-width:560px;margin:auto;padding:28px;border:1px solid #dce9dc;border-radius:20px"><h2 style="color:#075b37">Recuperar contraseña</h2><p>Recibimos una solicitud para actualizar la contraseña de tu cuenta como ' . htmlspecialchars($roleLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' de Gestión Institucional.</p><p>Para elegir una contraseña nueva, abre este enlace:</p><p><a style="display:inline-block;padding:13px 20px;border-radius:999px;background:#087c45;color:#fff;text-decoration:none;font-weight:bold" href="' . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">Actualizar contraseña</a></p><p>El enlace vence en 30 minutos y solo puede usarse una vez. Si no solicitaste este cambio, ignora este mensaje.</p></div>',
+                    "Recuperar contraseña como {$roleLabel} de Gestión Institucional. Usa este enlace para actualizarla (vence en 30 minutos): {$link}"
                 );
             } catch (\PHPMailer\PHPMailer\Exception $exception) {
                 $db->prepare('DELETE FROM recuperacion_password WHERE token_hash = ?')->execute([hash('sha256', $token)]);
                 error_log('[gestion-institucional] Password recovery email send failed: ' . $exception->getMessage());
-                respond(['error' => 'No se pudo enviar el correo. Verifica la cuenta y la configuración SMTP de Gmail.'], 503);
+                respond(['error' => 'No pudimos enviar el correo. Revisa la configuración SMTP de Gmail o Hotmail e inténtalo de nuevo.'], 503);
             }
         }
         respond(['data' => ['message' => 'Si el correo está registrado, recibirás instrucciones para recuperar tu cuenta.']]);
@@ -735,8 +883,9 @@ try {
     }
 
     $roles = [
-        'users' => ['administrador'], 'environments' => ['administrador'],
-        'fichas' => ['administrador','instructor'], 'enrollments' => ['administrador'], 'cards' => ['administrador','estudiante'], 'maintenance' => ['administrador'],
+        'users' => ['administrador'], 'ficha-assignments' => ['administrador'],
+        'environments' => ['administrador','instructor'],
+        'fichas' => ['administrador'], 'enrollments' => ['administrador'], 'cards' => ['administrador','estudiante'], 'maintenance' => ['administrador'],
         'schedules' => ['administrador','instructor','estudiante'],
         'reservations' => ['administrador'], 'attendance' => ['administrador','instructor','estudiante'],
         'novelties' => ['administrador','instructor'], 'accesses' => ['administrador','portero'],
@@ -761,14 +910,57 @@ try {
         }
         respond(['data' => $stats]);
     }
+    if ($route === 'options' && $method === 'GET') {
+        $actor = requireRoles($user, ['administrador','instructor']);
+        $fichaSql = "SELECT id, codigo, nombre, programa, trimestre FROM fichas
+            WHERE fecha_inicio <= CURRENT_DATE() AND fecha_fin >= CURRENT_DATE()";
+        if ($actor['rol'] === 'instructor') {
+            $fichaSql .= ' AND EXISTS (SELECT 1 FROM fichas_instructores fi
+                WHERE fi.ficha_id = fichas.id AND fi.instructor_id = ?)';
+        }
+        $fichaSql .= ' ORDER BY codigo';
+        $fichaStmt = $db->prepare($fichaSql);
+        $fichaStmt->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
+        $fichas = $fichaStmt->fetchAll();
+        $ambientes = $db->query("SELECT id, codigo, nombre FROM ambientes
+            WHERE estado <> 'mantenimiento' ORDER BY codigo")->fetchAll();
+        $instructorSql = "SELECT u.id, u.documento, u.nombres, u.apellidos FROM usuarios u
+            JOIN roles r ON r.id = u.rol_id WHERE r.nombre = 'instructor' AND u.activo = 1";
+        if ($actor['rol'] === 'instructor') {
+            $instructorSql .= ' AND u.id = ?';
+        }
+        $instructorSql .= ' ORDER BY u.apellidos, u.nombres';
+        $instructorStmt = $db->prepare($instructorSql);
+        $instructorStmt->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
+        $instructors = $instructorStmt->fetchAll();
+        $studentSql = "SELECT u.id, u.documento, u.nombres, u.apellidos FROM usuarios u
+            JOIN roles r ON r.id = u.rol_id WHERE r.nombre = 'estudiante' AND u.activo = 1";
+        if ($actor['rol'] === 'instructor') {
+            $studentSql .= ' AND EXISTS (SELECT 1 FROM fichas_usuarios fu
+                JOIN fichas_instructores fi ON fi.ficha_id = fu.ficha_id
+                WHERE fu.usuario_id = u.id AND fi.instructor_id = ?)';
+        }
+        $studentSql .= ' ORDER BY u.apellidos, u.nombres';
+        $studentStmt = $db->prepare($studentSql);
+        $studentStmt->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
+        $students = $studentStmt->fetchAll();
+        respond(['data' => ['fichas' => $fichas, 'ambientes' => $ambientes,
+            'instructores' => $instructors, 'estudiantes' => $students]]);
+    }
     if ($route === 'attendance' && ($parts[1] ?? '') === 'alerts' && $method === 'GET') {
-        requireRoles($user, ['administrador','instructor']);
-        $stmt = $db->query("SELECT a.usuario_id, u.documento, u.nombres, u.apellidos, a.fecha, a.estado
+        $actor = requireRoles($user, ['administrador','instructor']);
+        $alertSql = "SELECT a.usuario_id, u.documento, u.nombres, u.apellidos, a.fecha, a.estado
             FROM asistencias a
             JOIN usuarios u ON u.id = a.usuario_id
             JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
             WHERE a.fecha >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-            ORDER BY a.usuario_id, a.fecha DESC");
+            " . ($actor['rol'] === 'instructor'
+                ? "AND EXISTS (SELECT 1 FROM fichas_instructores fi
+                    WHERE fi.ficha_id = a.ficha_id AND fi.instructor_id = ?)"
+                : '') . "
+            ORDER BY a.usuario_id, a.fecha DESC";
+        $stmt = $db->prepare($alertSql);
+        $stmt->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
         $absences = [];
         $alerts = [];
         foreach ($stmt->fetchAll() as $row) {
@@ -815,96 +1007,116 @@ try {
         respond(['data' => $summary]);
     }
     if ($route === 'attendance' && ($parts[1] ?? '') === 'progress' && $method === 'GET') {
-        $instructor = requireRoles($user, ['instructor']);
-        $instructorId = (int)$instructor['id'];
+        $actor = requireRoles($user, ['administrador','instructor']);
         $studentId = $_GET['usuario_id'] ?? '';
         if ($studentId !== '') {
             if (!ctype_digit((string)$studentId) || (int)$studentId < 1) {
                 respond(['error' => 'El estudiante seleccionado no es válido.'], 422);
             }
+            $studentSql = "SELECT 1 FROM usuarios u
+                JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
+                WHERE u.id = ? AND u.activo = 1";
+            if ($actor['rol'] === 'instructor') {
+                $studentSql .= " AND EXISTS (
+                    SELECT 1 FROM fichas_usuarios fu
+                    JOIN fichas_instructores fi ON fi.ficha_id = fu.ficha_id
+                    WHERE fu.usuario_id = u.id AND fi.instructor_id = ?
+                )";
+            }
+            $student = $db->prepare($studentSql);
+            $studentParams = [(int)$studentId];
+            if ($actor['rol'] === 'instructor') {
+                $studentParams[] = (int)$actor['id'];
+            }
+            $student->execute($studentParams);
+            if (!$student->fetchColumn()) {
+                respond(['error' => 'No se encontró el aprendiz.'], 404);
+            }
             $history = $db->prepare("SELECT a.fecha, f.codigo AS ficha_codigo, f.nombre AS ficha_nombre,
-                    a.estado, a.observacion,
-                    (SELECT GROUP_CONCAT(DISTINCT amb.nombre ORDER BY amb.nombre SEPARATOR ', ')
-                     FROM horarios h JOIN ambientes amb ON amb.id = h.ambiente_id
-                     WHERE h.ficha_id = a.ficha_id AND h.instructor_id = ?) AS ambientes
+                    f.programa, f.trimestre, a.estado, a.observacion, h.asignatura,
+                    h.hora_inicio, h.hora_fin, amb.nombre AS ambiente,
+                    CONCAT(i.nombres, ' ', i.apellidos) AS instructor
                 FROM asistencias a
                 JOIN fichas f ON f.id = a.ficha_id
-                JOIN fichas_usuarios fu ON fu.ficha_id = a.ficha_id AND fu.usuario_id = a.usuario_id
-                WHERE a.usuario_id = ?
-                  AND a.ficha_id IN (SELECT ficha_id FROM horarios WHERE instructor_id = ?)
-                ORDER BY a.fecha DESC, f.codigo
+                LEFT JOIN horarios h ON h.id = a.horario_id
+                LEFT JOIN ambientes amb ON amb.id = h.ambiente_id
+                LEFT JOIN usuarios i ON i.id = h.instructor_id
+                WHERE a.usuario_id = ?" . ($actor['rol'] === 'instructor'
+                    ? " AND EXISTS (SELECT 1 FROM fichas_instructores fi
+                        WHERE fi.ficha_id = a.ficha_id AND fi.instructor_id = ?)"
+                    : '') . "
+                ORDER BY a.fecha DESC, f.codigo, h.hora_inicio
                 LIMIT 500");
-            $history->execute([$instructorId, (int)$studentId, $instructorId]);
-            respond(['data' => $history->fetchAll()]);
+            $historyParams = [(int)$studentId];
+            if ($actor['rol'] === 'instructor') {
+                $historyParams[] = (int)$actor['id'];
+            }
+            $history->execute($historyParams);
+            $historyRows = $history->fetchAll();
+            respond(['data' => $historyRows]);
+        }
+        $requestedFichaId = $_GET['ficha_id'] ?? '';
+        if ($requestedFichaId !== '' && (!ctype_digit((string)$requestedFichaId) || (int)$requestedFichaId < 1)) {
+            respond(['error' => 'La ficha seleccionada no es válida.'], 422);
+        }
+        if ($requestedFichaId !== '') {
+            $accessibleFicha = $db->prepare("SELECT 1 FROM fichas f
+                WHERE f.id = ? AND f.fecha_inicio <= CURRENT_DATE() AND f.fecha_fin >= CURRENT_DATE()" .
+                ($actor['rol'] === 'instructor'
+                    ? " AND EXISTS (SELECT 1 FROM fichas_instructores fi
+                        WHERE fi.ficha_id = f.id AND fi.instructor_id = ?)"
+                    : ''));
+            $accessibleFicha->execute($actor['rol'] === 'instructor'
+                ? [(int)$requestedFichaId, (int)$actor['id']]
+                : [(int)$requestedFichaId]);
+            if (!$accessibleFicha->fetchColumn()) {
+                respond(['error' => 'No tienes acceso a la ficha seleccionada.'], 403);
+            }
         }
         $stmt = $db->prepare("SELECT u.documento, u.nombres, u.apellidos,
                 u.id AS usuario_id,
-                f.codigo AS ficha_codigo, f.nombre AS ficha_nombre,
-                COALESCE(env.ambientes, '') AS ambientes,
+                f.codigo AS ficha_codigo, f.nombre AS ficha_nombre, f.programa, f.trimestre,
                 COUNT(DISTINCT CASE WHEN a.estado = 'presente' THEN a.id END) AS presentes,
                 COUNT(DISTINCT CASE WHEN a.estado = 'ausente' THEN a.id END) AS ausencias,
                 COUNT(DISTINCT CASE WHEN a.estado = 'tarde' THEN a.id END) AS retrasos,
                 COUNT(DISTINCT CASE WHEN a.estado = 'permiso' THEN a.id END) AS permisos,
-                MAX(a.fecha) AS ultima_clase
-            FROM horarios instructor_horarios
-            JOIN fichas f ON f.id = instructor_horarios.ficha_id AND f.estado = 'activa'
+                MAX(a.fecha) AS ultima_asistencia
+            FROM fichas f
             JOIN fichas_usuarios fu ON fu.ficha_id = f.id
             JOIN usuarios u ON u.id = fu.usuario_id AND u.activo = 1
             JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
             LEFT JOIN asistencias a ON a.usuario_id = u.id AND a.ficha_id = f.id
-            LEFT JOIN (
-                SELECT h.ficha_id, GROUP_CONCAT(DISTINCT amb.nombre ORDER BY amb.nombre SEPARATOR ', ') AS ambientes
-                FROM horarios h JOIN ambientes amb ON amb.id = h.ambiente_id
-                WHERE h.instructor_id = ?
-                GROUP BY h.ficha_id
-            ) env ON env.ficha_id = f.id
-            WHERE instructor_horarios.instructor_id = ?
-            GROUP BY u.id, u.documento, u.nombres, u.apellidos, f.id, f.codigo, f.nombre, env.ambientes
+            WHERE f.fecha_inicio <= CURRENT_DATE() AND f.fecha_fin >= CURRENT_DATE()" .
+                ($actor['rol'] === 'instructor'
+                    ? ' AND EXISTS (SELECT 1 FROM fichas_instructores fi
+                        WHERE fi.ficha_id = f.id AND fi.instructor_id = ?)'
+                    : '') .
+                ($requestedFichaId !== '' ? ' AND f.id = ?' : '') . "
+            GROUP BY u.id, u.documento, u.nombres, u.apellidos, f.id, f.codigo, f.nombre, f.programa, f.trimestre
             ORDER BY u.apellidos, u.nombres, f.codigo");
-        $stmt->execute([$instructorId, $instructorId]);
+        $progressParams = $actor['rol'] === 'instructor' ? [(int)$actor['id']] : [];
+        if ($requestedFichaId !== '') {
+            $progressParams[] = (int)$requestedFichaId;
+        }
+        $stmt->execute($progressParams);
         respond(['data' => $stmt->fetchAll()]);
     }
     if ($route === 'attendance' && ($parts[1] ?? '') === 'roster' && $method === 'GET') {
         $actor = requireRoles($user, ['administrador','instructor']);
-        $environmentId = $_GET['ambiente_id'] ?? '';
-        if ($environmentId !== '' && !ctype_digit((string)$environmentId)) {
-            respond(['error' => 'El ambiente seleccionado no es válido.'], 422);
-        }
-        $environmentConditions = [];
-        $environmentParams = [];
-        if ($actor['rol'] === 'instructor') {
-            $environmentConditions[] = 'h.instructor_id = ?';
-            $environmentParams[] = (int)$actor['id'];
-        }
-        $environmentStmt = $db->prepare('SELECT DISTINCT amb.id, amb.codigo, amb.nombre
-            FROM ambientes amb JOIN horarios h ON h.ambiente_id = amb.id' .
-            ($environmentConditions ? ' WHERE ' . implode(' AND ', $environmentConditions) : '') .
-            ' ORDER BY amb.nombre, amb.codigo');
-        $environmentStmt->execute($environmentParams);
-        $environments = $environmentStmt->fetchAll();
-        $requestedEnvironment = $environmentId === '' ? 0 : (int)$environmentId;
-        if ($requestedEnvironment && !in_array($requestedEnvironment, array_map(static fn($environment) => (int)$environment['id'], $environments), true)) {
-            respond(['error' => 'No tienes acceso al ambiente seleccionado.'], 403);
-        }
-        $fichaConditions = ["f.estado = 'activa'"];
+        $fichaConditions = ['f.fecha_inicio <= CURRENT_DATE()', 'f.fecha_fin >= CURRENT_DATE()'];
         $fichaParams = [];
         if ($actor['rol'] === 'instructor') {
-            $fichaConditions[] = 'EXISTS (SELECT 1 FROM horarios h WHERE h.ficha_id = f.id AND h.instructor_id = ?)';
+            $fichaConditions[] = 'EXISTS (SELECT 1 FROM fichas_instructores fi WHERE fi.ficha_id = f.id AND fi.instructor_id = ?)';
             $fichaParams[] = (int)$actor['id'];
         }
-        if ($requestedEnvironment) {
-            $fichaConditions[] = 'EXISTS (SELECT 1 FROM horarios h WHERE h.ficha_id = f.id AND h.ambiente_id = ?' .
-                ($actor['rol'] === 'instructor' ? ' AND h.instructor_id = ?' : '') . ')';
-            $fichaParams[] = $requestedEnvironment;
-            if ($actor['rol'] === 'instructor') {
-                $fichaParams[] = (int)$actor['id'];
-            }
-        }
-        $fichasStmt = $db->prepare('SELECT f.id, f.codigo, f.nombre FROM fichas f WHERE ' .
-            implode(' AND ', $fichaConditions) . ' ORDER BY f.nombre, f.codigo');
+        $fichasStmt = $db->prepare('SELECT f.id, f.codigo, f.nombre, f.programa, f.trimestre FROM fichas f WHERE ' .
+            implode(' AND ', $fichaConditions) . ' ORDER BY f.programa, f.codigo');
         $fichasStmt->execute($fichaParams);
         $fichas = $fichasStmt->fetchAll();
         $requestedFicha = $_GET['ficha_id'] ?? '';
+        if ($requestedFicha !== '' && (!ctype_digit((string)$requestedFicha) || (int)$requestedFicha < 1)) {
+            respond(['error' => 'La ficha seleccionada no es válida.'], 422);
+        }
         $fichaId = ctype_digit((string)$requestedFicha) ? (int)$requestedFicha : (int)($fichas[0]['id'] ?? 0);
         $ficha = null;
         foreach ($fichas as $candidate) {
@@ -914,8 +1126,10 @@ try {
             }
         }
         if (!$ficha) {
-            respond(['data' => ['ambientes' => $environments, 'ambiente_seleccionado' => $requestedEnvironment ?: null,
-                'fichas' => $fichas, 'estudiantes' => []]]);
+            if ($requestedFicha !== '') {
+                respond(['error' => 'No tienes acceso a la ficha seleccionada.'], 403);
+            }
+            respond(['data' => ['fichas' => $fichas, 'estudiantes' => []]]);
         }
 
         $date = (string)($_GET['fecha'] ?? date('Y-m-d'));
@@ -924,21 +1138,91 @@ try {
             respond(['error' => 'La fecha debe usar el formato YYYY-MM-DD.'], 422);
         }
         $studentsStmt = $db->prepare("SELECT u.id, u.documento, u.nombres, u.apellidos, u.correo, u.telefono, u.foto,
-                c.codigo_qr, a.id AS asistencia_id, a.estado, a.observacion
+                c.codigo_qr, a.id AS asistencia_id, a.estado, a.observacion,
+                COALESCE(progress.presentes, 0) AS presentes,
+                COALESCE(progress.ausencias, 0) AS ausencias,
+                COALESCE(progress.retrasos, 0) AS retrasos,
+                COALESCE(progress.permisos, 0) AS permisos
             FROM fichas_usuarios fu
             JOIN usuarios u ON u.id = fu.usuario_id
             JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
             LEFT JOIN carnets c ON c.usuario_id = u.id
-            LEFT JOIN asistencias a ON a.usuario_id = u.id AND a.ficha_id = fu.ficha_id AND a.fecha = ?
+            LEFT JOIN asistencias a ON a.id = (
+                SELECT today.id FROM asistencias today
+                WHERE today.usuario_id = fu.usuario_id AND today.ficha_id = fu.ficha_id AND today.fecha = ?
+                ORDER BY today.registrado_en DESC, today.id DESC LIMIT 1
+            )
+            LEFT JOIN (
+                SELECT usuario_id, ficha_id,
+                    SUM(estado = 'presente') AS presentes,
+                    SUM(estado = 'ausente') AS ausencias,
+                    SUM(estado = 'tarde') AS retrasos,
+                    SUM(estado = 'permiso') AS permisos
+                FROM asistencias
+                GROUP BY usuario_id, ficha_id
+            ) progress ON progress.usuario_id = fu.usuario_id AND progress.ficha_id = fu.ficha_id
             WHERE fu.ficha_id = ? AND u.activo = 1
             ORDER BY u.nombres, u.apellidos, u.id");
         $studentsStmt->execute([$date, $fichaId]);
-        respond(['data' => ['ambientes' => $environments, 'ambiente_seleccionado' => $requestedEnvironment ?: null,
-            'fichas' => $fichas, 'ficha_seleccionada' => $fichaId, 'fecha' => $date,
+        respond(['data' => ['fichas' => $fichas, 'ficha_seleccionada' => $fichaId, 'fecha' => $date,
             'estudiantes' => $studentsStmt->fetchAll()]]);
     }
-    if ($route === 'schedules' && $method === 'GET' && $user && $user['rol'] === 'estudiante') {
-        $student = requireRoles($user, ['estudiante']);
+    if ($route === 'schedules' && ($parts[1] ?? '') === 'availability' && $method === 'GET') {
+        $actor = requireRoles($user, ['administrador','instructor']);
+        $dayNames = [1=>'Lunes',2=>'Martes',3=>'Miércoles',4=>'Jueves',5=>'Viernes',6=>'Sábado',7=>'Domingo'];
+        $environments = $db->query('SELECT id, codigo, nombre, ubicacion, estado FROM ambientes ORDER BY nombre, codigo')->fetchAll();
+        $availability = [];
+        foreach ($environments as $environment) {
+            foreach ($dayNames as $dayNumber => $dayName) {
+                $availability[(int)$environment['id'] . ':' . $dayNumber] = [
+                    'ambiente_id' => (int)$environment['id'],
+                    'codigo' => $environment['codigo'],
+                    'ambiente' => $environment['nombre'],
+                    'ubicacion' => $environment['ubicacion'],
+                    'dia' => $dayName,
+                    'estado' => $environment['estado'] === 'mantenimiento' ? 'mantenimiento' : 'disponible',
+                    'horarios' => [],
+                ];
+            }
+        }
+        $scheduleSql = "SELECT h.ambiente_id, h.dia_semana, h.hora_inicio, h.hora_fin, h.asignatura,
+                f.codigo AS ficha_codigo, f.nombre AS ficha_nombre,
+                CONCAT(u.nombres, ' ', u.apellidos) AS instructor" .
+                ($actor['rol'] === 'administrador' ? ', 1 AS ficha_asignada' : ', (fi.id IS NOT NULL) AS ficha_asignada') . "
+            FROM horarios h
+            JOIN fichas f ON f.id = h.ficha_id
+                AND f.fecha_inicio <= CURRENT_DATE() AND f.fecha_fin >= CURRENT_DATE()
+            LEFT JOIN ambientes a ON a.id = h.ambiente_id
+            JOIN usuarios u ON u.id = h.instructor_id" .
+                ($actor['rol'] === 'instructor'
+                    ? ' LEFT JOIN fichas_instructores fi ON fi.ficha_id = f.id AND fi.instructor_id = ?'
+                    : '') . "
+            ORDER BY h.ambiente_id, h.dia_semana, h.hora_inicio";
+        $schedules = $db->prepare($scheduleSql);
+        $schedules->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
+        foreach ($schedules->fetchAll() as $schedule) {
+            $key = (int)$schedule['ambiente_id'] . ':' . (int)$schedule['dia_semana'];
+            if (!isset($availability[$key])) {
+                continue;
+            }
+            $availability[$key]['estado'] = $availability[$key]['estado'] === 'mantenimiento' ? 'mantenimiento' : 'ocupado';
+            $assigned = (bool)$schedule['ficha_asignada'];
+            $availability[$key]['horarios'][] = [
+                'inicio' => substr($schedule['hora_inicio'], 0, 5),
+                'fin' => substr($schedule['hora_fin'], 0, 5),
+                'asignatura' => $assigned ? $schedule['asignatura'] : null,
+                'ficha_codigo' => $assigned ? $schedule['ficha_codigo'] : null,
+                'ficha_asignada' => $assigned,
+                'instructor' => $assigned ? $schedule['instructor'] : null,
+            ];
+        }
+        respond(['data' => array_values($availability)]);
+    }
+    if ($route === 'schedules' && $method === 'GET' && $user && in_array($user['rol'], ['estudiante','instructor'], true)) {
+        $viewer = requireRoles($user, ['estudiante','instructor']);
+        $membershipJoin = $viewer['rol'] === 'estudiante'
+            ? 'JOIN fichas_usuarios fu ON fu.ficha_id = h.ficha_id AND fu.usuario_id = ?'
+            : 'JOIN fichas_instructores fu ON fu.ficha_id = h.ficha_id AND fu.instructor_id = ?';
         $stmt = $db->prepare("SELECT
                 CASE h.dia_semana
                     WHEN 1 THEN 'Lunes' WHEN 2 THEN 'Martes' WHEN 3 THEN 'Miércoles'
@@ -946,15 +1230,15 @@ try {
                     WHEN 7 THEN 'Domingo'
                 END AS dia,
                 h.hora_inicio, h.hora_fin, h.asignatura,
-                f.codigo AS ficha, f.nombre AS nombre_ficha, a.nombre AS ambiente,
+                f.codigo AS ficha, f.nombre AS nombre_ficha, f.programa, f.trimestre, a.nombre AS ambiente,
                 CONCAT(i.nombres, ' ', i.apellidos) AS instructor
             FROM horarios h
-            JOIN fichas_usuarios fu ON fu.ficha_id = h.ficha_id AND fu.usuario_id = ?
+            {$membershipJoin}
             JOIN fichas f ON f.id = h.ficha_id
             JOIN ambientes a ON a.id = h.ambiente_id
             JOIN usuarios i ON i.id = h.instructor_id
-            ORDER BY h.dia_semana, h.hora_inicio, h.asignatura");
-        $stmt->execute([(int)$student['id']]);
+            ORDER BY f.trimestre, h.dia_semana, h.hora_inicio, h.asignatura");
+        $stmt->execute([(int)$viewer['id']]);
         respond(['data' => $stmt->fetchAll()]);
     }
     if ($route === 'equipment-movements' && ($parts[1] ?? '') === 'scan' && $method === 'POST') {
@@ -1005,11 +1289,23 @@ try {
             !in_array($data['estado'], ['presente','ausente','tarde','permiso'], true)) {
             respond(['error' => 'El estudiante, la ficha o el estado de asistencia no son válidos.'], 422);
         }
+        $scheduleId = null;
+        if (isset($data['horario_id']) && $data['horario_id'] !== '') {
+            if (!ctype_digit((string)$data['horario_id']) || (int)$data['horario_id'] < 1) {
+                respond(['error' => 'El horario seleccionado no es válido.'], 422);
+            }
+            $scheduleId = (int)$data['horario_id'];
+        }
         $date = (string)($data['fecha'] ?? date('Y-m-d'));
         $parsedDate = DateTime::createFromFormat('!Y-m-d', $date);
         if (!$parsedDate || $parsedDate->format('Y-m-d') !== $date) {
             respond(['error' => 'La fecha debe usar el formato YYYY-MM-DD.'], 422);
         }
+        $observation = $data['observacion'] ?? null;
+        if ($observation !== null && (!is_string($observation) || mb_strlen($observation) > 500)) {
+            respond(['error' => 'La observación debe tener máximo 500 caracteres.'], 422);
+        }
+        $observation = $observation === null || trim($observation) === '' ? null : trim($observation);
         $enrollment = $db->prepare("SELECT 1 FROM fichas_usuarios fu
             JOIN usuarios u ON u.id = fu.usuario_id AND u.activo = 1
             JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
@@ -1019,35 +1315,47 @@ try {
             respond(['error' => 'El estudiante no está inscrito en la ficha seleccionada.'], 422);
         }
         if ($actor['rol'] === 'instructor') {
-            $assigned = $db->prepare('SELECT 1 FROM horarios WHERE ficha_id = ? AND instructor_id = ?');
-            $assigned->execute([(int)$data['ficha_id'], (int)$actor['id']]);
-            if (!$assigned->fetchColumn()) {
-                respond(['error' => 'Solo puedes registrar asistencia en tus fichas asignadas.'], 403);
+            $assignedFicha = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+            $assignedFicha->execute([(int)$data['ficha_id'], (int)$actor['id']]);
+            if (!$assignedFicha->fetchColumn()) {
+                respond(['error' => 'Solo puedes registrar asistencia en las fichas que tienes asignadas.'], 403);
+            }
+        }
+        if ($scheduleId !== null) {
+            $scheduledClass = $db->prepare('SELECT id FROM horarios WHERE id = ? AND ficha_id = ?');
+            $scheduledClass->execute([$scheduleId, (int)$data['ficha_id']]);
+            if (!$scheduledClass->fetchColumn()) {
+                respond(['error' => 'El horario seleccionado no pertenece a la ficha.'], 422);
             }
         }
         $db->beginTransaction();
         try {
-            $existing = $db->prepare('SELECT id, estado, observacion FROM asistencias WHERE usuario_id = ? AND ficha_id = ? AND fecha = ?');
-            $existing->execute([(int)$data['usuario_id'], (int)$data['ficha_id'], $date]);
+            $existingSql = 'SELECT id, estado, observacion FROM asistencias
+                WHERE usuario_id = ? AND ficha_id = ? AND fecha = ? AND ' .
+                ($scheduleId === null ? 'horario_id IS NULL' : 'horario_id = ?');
+            $existing = $db->prepare($existingSql);
+            $existingParams = [(int)$data['usuario_id'], (int)$data['ficha_id'], $date];
+            if ($scheduleId !== null) {
+                $existingParams[] = $scheduleId;
+            }
+            $existing->execute($existingParams);
             $previous = $existing->fetch();
             if ($previous) {
                 $stmt = $db->prepare('UPDATE asistencias SET estado = ?, observacion = ?, registrado_por = ? WHERE id = ?');
-                $observation = $data['observacion'] ?? null;
                 $stmt->execute([$data['estado'], $observation, $actor['id'], $previous['id']]);
                 $id = (int)$previous['id'];
                 $action = 'actualizar';
                 if ($previous['estado'] !== $data['estado'] || $previous['observacion'] !== $observation) {
-                    notifyAttendance($db, (int)$data['usuario_id'], $data['estado'], $date, $observation);
+                    notifyAttendance($db, (int)$data['usuario_id'], (int)$data['ficha_id'], $scheduleId, $data['estado'], $date, $observation);
                 }
             } else {
-                $observation = $data['observacion'] ?? null;
-                $stmt = $db->prepare('INSERT INTO asistencias (usuario_id,ficha_id,fecha,estado,registrado_por,observacion)
-                    VALUES (?,?,?,?,?,?)');
-                $stmt->execute([(int)$data['usuario_id'], (int)$data['ficha_id'], $date,
+                $stmt = $db->prepare('INSERT INTO asistencias (usuario_id,ficha_id,horario_id,fecha,estado,registrado_por,observacion)
+                    VALUES (?,?,?,?,?,?,?)');
+                $stmt->execute([(int)$data['usuario_id'], (int)$data['ficha_id'], $scheduleId, $date,
                     $data['estado'], $actor['id'], $observation]);
                 $id = (int)$db->lastInsertId();
                 $action = 'crear';
-                notifyAttendance($db, (int)$data['usuario_id'], $data['estado'], $date, $observation);
+                notifyAttendance($db, (int)$data['usuario_id'], (int)$data['ficha_id'], $scheduleId, $data['estado'], $date, $observation);
             }
             audit($db, (int)$actor['id'], $action, 'asistencias', $id);
             $db->commit();
@@ -1114,8 +1422,9 @@ try {
 
     $resources = [
         'users' => ['table'=>'usuarios','columns'=>['id','rol_id','documento','nombres','apellidos','correo','telefono','activo','ultimo_acceso','creado_en'],'fields'=>['rol_id','documento','nombres','apellidos','correo','password','telefono','activo']],
+        'ficha-assignments' => ['table'=>'fichas_instructores','columns'=>['id','ficha_id','instructor_id'],'fields'=>['ficha_id','instructor_id']],
         'environments' => ['table'=>'ambientes','columns'=>['id','codigo','nombre','ubicacion','capacidad','estado','descripcion'],'fields'=>['codigo','nombre','ubicacion','capacidad','estado','descripcion']],
-        'fichas' => ['table'=>'fichas','columns'=>['id','codigo','nombre','fecha_inicio','fecha_fin','estado'],'fields'=>['codigo','nombre','fecha_inicio','fecha_fin','estado']],
+        'fichas' => ['table'=>'fichas','columns'=>['id','codigo','programa','fecha_inicio','fecha_fin','estado'],'fields'=>['codigo','nombre','programa','trimestre','fecha_inicio','fecha_fin']],
         'enrollments' => ['table'=>'fichas_usuarios','columns'=>['id','ficha_id','usuario_id','inscrito_en'],'fields'=>['ficha_id','usuario_id']],
         'cards' => ['table'=>'carnets','columns'=>['id','usuario_id','codigo_qr','emitido_en','vence_en'],'fields'=>['usuario_id','codigo_qr','vence_en']],
         'maintenance' => ['table'=>'mantenimientos','columns'=>['id','ambiente_id','responsable_id','tipo','descripcion','programado_en','finalizado_en','estado'],'fields'=>['ambiente_id','responsable_id','tipo','descripcion','programado_en','finalizado_en','estado']],
@@ -1147,6 +1456,15 @@ try {
                 $params[] = (int)$user['id'];
             } else {
                 $where = ' WHERE usuario_id = ?';
+                $params[] = (int)$user['id'];
+            }
+        } elseif ($user['rol'] === 'instructor') {
+            if (in_array($reportKey, ['schedules','attendance'], true)) {
+                $where = ' WHERE ficha_id IN (SELECT ficha_id FROM fichas_instructores WHERE instructor_id = ?)';
+                $params[] = (int)$user['id'];
+            } elseif ($reportKey === 'novelties') {
+                $where = ' WHERE usuario_id IN (SELECT fu.usuario_id FROM fichas_usuarios fu
+                    JOIN fichas_instructores fi ON fi.ficha_id = fu.ficha_id WHERE fi.instructor_id = ?)';
                 $params[] = (int)$user['id'];
             }
         }
@@ -1207,8 +1525,8 @@ try {
         respond(['error' => 'Ruta API no encontrada.'], 404);
     }
     $actor = requireRoles($user, $roles[$route]);
-    if ($route === 'fichas' && $actor['rol'] === 'instructor' && $method !== 'GET') {
-        respond(['error' => 'Los instructores solo pueden consultar fichas.'], 403);
+    if ($route === 'environments' && $actor['rol'] === 'instructor' && $method !== 'GET') {
+        respond(['error' => 'Los instructores pueden consultar ambientes, pero solo administración puede modificarlos.'], 403);
     }
     if ($actor['rol'] === 'estudiante' && !($route === 'schedules' && $method === 'GET') &&
         !($route === 'enrollments' && $method === 'GET') &&
@@ -1217,17 +1535,15 @@ try {
         !($route === 'notifications' && $method === 'GET')) {
         respond(['error' => 'Los estudiantes solo pueden consultar sus horarios, asistencias y notificaciones.'], 403);
     }
+    if ($route === 'ficha-assignments' && $method !== 'GET' && $actor['rol'] !== 'administrador') {
+        respond(['error' => 'Solo administración puede asignar instructores a fichas.'], 403);
+    }
+    if ($route === 'attendance' && $method === 'POST' && $actor['rol'] === 'instructor') {
+        respond(['error' => 'Registra asistencia desde la lista de tus fichas asignadas.'], 403);
+    }
     $resource = $resources[$route];
     $id = isset($parts[1]) && ctype_digit($parts[1]) ? (int)$parts[1] : null;
 
-    if ($route === 'attendance' && $actor['rol'] === 'instructor' && $id !== null) {
-        $assignedRecord = $db->prepare('SELECT 1 FROM asistencias a JOIN horarios h ON h.ficha_id = a.ficha_id
-            WHERE a.id = ? AND h.instructor_id = ? LIMIT 1');
-        $assignedRecord->execute([$id, (int)$actor['id']]);
-        if (!$assignedRecord->fetchColumn()) {
-            respond(['error' => 'Solo puedes administrar asistencias de tus fichas asignadas.'], 403);
-        }
-    }
     if ($route === 'attendance' && $id !== null && in_array($method, ['PUT','PATCH'], true)) {
         $data = body();
         $unknown = array_diff(array_keys($data), ['estado','observacion']);
@@ -1240,11 +1556,18 @@ try {
         if (isset($data['observacion']) && (!is_string($data['observacion']) || mb_strlen($data['observacion']) > 500)) {
             respond(['error' => 'La observación debe tener máximo 500 caracteres.'], 422);
         }
-        $previousStmt = $db->prepare('SELECT usuario_id, estado, fecha, observacion FROM asistencias WHERE id = ?');
+        $previousStmt = $db->prepare('SELECT usuario_id, ficha_id, horario_id, estado, fecha, observacion FROM asistencias WHERE id = ?');
         $previousStmt->execute([$id]);
         $previous = $previousStmt->fetch();
         if (!$previous) {
             respond(['error' => 'Registro no encontrado.'], 404);
+        }
+        if ($actor['rol'] === 'instructor') {
+            $assignedFicha = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+            $assignedFicha->execute([(int)$previous['ficha_id'], (int)$actor['id']]);
+            if (!$assignedFicha->fetchColumn()) {
+                respond(['error' => 'Solo puedes modificar asistencias de tus fichas asignadas.'], 403);
+            }
         }
         $db->beginTransaction();
         try {
@@ -1261,7 +1584,9 @@ try {
             $newStatus = $data['estado'] ?? $previous['estado'];
             $newObservation = array_key_exists('observacion', $data) ? ($data['observacion'] === '' ? null : $data['observacion']) : $previous['observacion'];
             if ($previous['estado'] !== $newStatus || $previous['observacion'] !== $newObservation) {
-                notifyAttendance($db, (int)$previous['usuario_id'], $newStatus, $previous['fecha'], $newObservation);
+                notifyAttendance($db, (int)$previous['usuario_id'], (int)$previous['ficha_id'],
+                    $previous['horario_id'] === null ? null : (int)$previous['horario_id'],
+                    $newStatus, $previous['fecha'], $newObservation);
             }
             $db->commit();
         } catch (Throwable $exception) {
@@ -1276,7 +1601,11 @@ try {
         $where = 'usuario_id = ?';
         $params = [(int)$actor['id']];
     } elseif ($route === 'attendance' && $actor['rol'] === 'instructor') {
-        $where = 'ficha_id IN (SELECT ficha_id FROM horarios WHERE instructor_id = ?)';
+        $where = 'ficha_id IN (SELECT ficha_id FROM fichas_instructores WHERE instructor_id = ?)';
+        $params = [(int)$actor['id']];
+    } elseif ($route === 'novelties' && $actor['rol'] === 'instructor') {
+        $where = 'usuario_id IN (SELECT fu.usuario_id FROM fichas_usuarios fu
+            JOIN fichas_instructores fi ON fi.ficha_id = fu.ficha_id WHERE fi.instructor_id = ?)';
         $params = [(int)$actor['id']];
     } elseif ($route === 'notifications') {
         $where = 'usuario_id = ?';
@@ -1309,10 +1638,160 @@ try {
     }
 
     if ($method === 'GET') {
+        if ($route === 'fichas') {
+            $fichaSql = "SELECT id, codigo, programa, fecha_inicio, fecha_fin,
+                    CASE
+                        WHEN fecha_inicio IS NOT NULL AND fecha_inicio > CURRENT_DATE() THEN 'Programada'
+                        WHEN fecha_fin IS NOT NULL AND fecha_fin < CURRENT_DATE() THEN 'Terminada'
+                        ELSE 'Activa'
+                    END AS estado
+                FROM fichas";
+            if ($id !== null) {
+                $stmt = $db->prepare($fichaSql . ' WHERE id = ? LIMIT 1');
+                $stmt->execute([$id]);
+                $row = $stmt->fetch();
+                if (!$row) {
+                    respond(['error' => 'Registro no encontrado.'], 404);
+                }
+                respond(['data' => $row]);
+            }
+            respond(['data' => $db->query($fichaSql . ' ORDER BY codigo LIMIT 200')->fetchAll()]);
+        }
+        if ($route === 'users') {
+            $stmt = $db->query("SELECT u.id, u.rol_id, r.nombre AS rol, u.documento, u.nombres, u.apellidos,
+                    u.correo, u.telefono, u.activo, u.ultimo_acceso, u.creado_en
+                FROM usuarios u JOIN roles r ON r.id = u.rol_id
+                ORDER BY r.id, u.apellidos, u.nombres, u.id DESC LIMIT 200");
+            respond(['data' => $stmt->fetchAll()]);
+        }
+        if ($route === 'ficha-assignments') {
+            $assignmentSql = "SELECT fi.id, fi.ficha_id, fi.instructor_id, f.codigo AS ficha_codigo,
+                    f.nombre AS ficha_nombre, f.programa, f.trimestre,
+                    CONCAT(i.nombres, ' ', i.apellidos) AS instructor";
+            if ($actor['rol'] === 'instructor') {
+                $assignmentSql .= ", u.id AS estudiante_id, COALESCE(u.documento, '') AS documento,
+                    COALESCE(u.nombres, 'Sin aprendices inscritos') AS estudiante_nombres,
+                    COALESCE(u.apellidos, '') AS estudiante_apellidos";
+            } else {
+                $assignmentSql .= ", COUNT(DISTINCT CASE WHEN ru.nombre = 'estudiante' AND u.activo = 1
+                    THEN u.id END) AS aprendices";
+            }
+            $learnerJoin = $actor['rol'] === 'instructor'
+                ? "LEFT JOIN usuarios u ON u.id = fu.usuario_id AND u.activo = 1
+                    AND EXISTS (SELECT 1 FROM roles student_role WHERE student_role.id = u.rol_id AND student_role.nombre = 'estudiante')"
+                : 'LEFT JOIN usuarios u ON u.id = fu.usuario_id';
+            $assignmentSql .= " FROM fichas_instructores fi
+                JOIN fichas f ON f.id = fi.ficha_id
+                JOIN usuarios i ON i.id = fi.instructor_id
+                JOIN roles ri ON ri.id = i.rol_id AND ri.nombre = 'instructor'
+                LEFT JOIN fichas_usuarios fu ON fu.ficha_id = fi.ficha_id
+                {$learnerJoin}";
+            if ($actor['rol'] === 'instructor') {
+                $assignmentSql .= " WHERE fi.instructor_id = ?
+                    ORDER BY f.codigo, u.apellidos, u.nombres";
+                $stmt = $db->prepare($assignmentSql);
+                $stmt->execute([(int)$actor['id']]);
+            } else {
+                $assignmentSql .= " LEFT JOIN roles ru ON ru.id = u.rol_id
+                    GROUP BY fi.id, fi.ficha_id, fi.instructor_id, f.codigo, f.nombre, f.programa, f.trimestre,
+                        i.nombres, i.apellidos
+                    ORDER BY f.codigo, i.apellidos, i.nombres";
+                $stmt = $db->query($assignmentSql);
+            }
+            respond(['data' => $stmt->fetchAll()]);
+        }
+        if ($route === 'schedules') {
+            $scheduleSql = "SELECT h.id, h.ficha_id, h.ambiente_id, h.instructor_id, h.dia_semana,
+                    CASE h.dia_semana WHEN 1 THEN 'Lunes' WHEN 2 THEN 'Martes' WHEN 3 THEN 'Miércoles'
+                        WHEN 4 THEN 'Jueves' WHEN 5 THEN 'Viernes' WHEN 6 THEN 'Sábado' WHEN 7 THEN 'Domingo' END AS dia,
+                    h.hora_inicio, h.hora_fin, h.asignatura, f.codigo AS ficha_codigo,
+                    f.nombre AS ficha_nombre, f.programa, f.trimestre, a.codigo AS ambiente_codigo,
+                    a.nombre AS ambiente, CONCAT(u.nombres, ' ', u.apellidos) AS instructor
+                FROM horarios h JOIN fichas f ON f.id = h.ficha_id
+                JOIN ambientes a ON a.id = h.ambiente_id
+                JOIN usuarios u ON u.id = h.instructor_id";
+            if ($actor['rol'] === 'estudiante') {
+                $stmt = $db->prepare($scheduleSql . ' WHERE h.ficha_id IN (SELECT ficha_id FROM fichas_usuarios WHERE usuario_id = ?) ORDER BY f.codigo, h.dia_semana, h.hora_inicio');
+                $stmt->execute([(int)$actor['id']]);
+                $rows = $stmt->fetchAll();
+            } else {
+                $stmt = $db->query($scheduleSql . ' ORDER BY f.codigo, h.dia_semana, h.hora_inicio');
+                $rows = $stmt->fetchAll();
+            }
+            respond(['data' => $rows]);
+        }
+        if ($route === 'enrollments') {
+            $sql = "SELECT fu.id, fu.ficha_id, fu.usuario_id, fu.inscrito_en,
+                    f.codigo AS ficha_codigo, f.nombre AS ficha_nombre, f.programa, f.trimestre,
+                    u.documento, CONCAT(u.nombres, ' ', u.apellidos) AS estudiante
+                FROM fichas_usuarios fu JOIN fichas f ON f.id = fu.ficha_id
+                JOIN usuarios u ON u.id = fu.usuario_id";
+            if ($actor['rol'] === 'estudiante') {
+                $stmt = $db->prepare($sql . ' WHERE fu.usuario_id = ? ORDER BY f.codigo, u.apellidos, u.nombres');
+                $stmt->execute([(int)$actor['id']]);
+                $rows = $stmt->fetchAll();
+            } else {
+                $stmt = $db->query($sql . ' ORDER BY f.codigo, u.apellidos, u.nombres');
+                $rows = $stmt->fetchAll();
+            }
+            respond(['data' => $rows]);
+        }
+        if ($route === 'attendance' && $actor['rol'] === 'estudiante') {
+            $stmt = $db->prepare("SELECT a.id, a.fecha, a.estado, a.observacion, a.registrado_en,
+                    h.asignatura, h.hora_inicio, h.hora_fin,
+                    amb.nombre AS ambiente, CONCAT(i.nombres, ' ', i.apellidos) AS instructor,
+                    f.codigo AS ficha, f.nombre AS nombre_ficha, f.programa, f.trimestre
+                FROM asistencias a JOIN fichas f ON f.id = a.ficha_id
+                LEFT JOIN horarios h ON h.id = a.horario_id
+                LEFT JOIN ambientes amb ON amb.id = h.ambiente_id
+                LEFT JOIN usuarios i ON i.id = h.instructor_id
+                WHERE a.usuario_id = ? ORDER BY a.fecha DESC, h.hora_inicio DESC LIMIT 500");
+            $stmt->execute([(int)$actor['id']]);
+            respond(['data' => $stmt->fetchAll()]);
+        }
         sendRows($db, $resource['table'], $resource['columns'], $id, $where, $params);
     }
     if ($method === 'POST' && $id === null) {
         $data = body();
+        if ($route === 'fichas') {
+            validateFichaInput($data);
+            $existingCode = $db->prepare('SELECT 1 FROM fichas WHERE codigo = ?');
+            $existingCode->execute([$data['codigo']]);
+            if ($existingCode->fetchColumn()) {
+                respond(['error' => 'Ya existe una ficha con ese número.'], 409);
+            }
+        }
+        if ($route === 'ficha-assignments') {
+            foreach (['ficha_id','instructor_id'] as $field) {
+                if (!isset($data[$field]) || !ctype_digit((string)$data[$field]) || (int)$data[$field] < 1) {
+                    respond(['error' => 'Selecciona una ficha y un instructor válidos.'], 422);
+                }
+            }
+            $validFicha = $db->prepare("SELECT 1 FROM fichas
+                WHERE id = ? AND fecha_inicio <= CURRENT_DATE() AND fecha_fin >= CURRENT_DATE()");
+            $validFicha->execute([(int)$data['ficha_id']]);
+            $validInstructor = $db->prepare("SELECT 1 FROM usuarios u JOIN roles r ON r.id = u.rol_id
+                WHERE u.id = ? AND u.activo = 1 AND r.nombre = 'instructor'");
+            $validInstructor->execute([(int)$data['instructor_id']]);
+            if (!$validFicha->fetchColumn() || !$validInstructor->fetchColumn()) {
+                respond(['error' => 'Solo puedes asignar instructores activos a fichas activas.'], 422);
+            }
+            $existingAssignment = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+            $existingAssignment->execute([(int)$data['ficha_id'], (int)$data['instructor_id']]);
+            if ($existingAssignment->fetchColumn()) {
+                respond(['error' => 'Ese instructor ya está asignado a la ficha seleccionada.'], 409);
+            }
+        }
+        if ($route === 'schedules' && $actor['rol'] === 'instructor') {
+            if (!isset($data['ficha_id']) || !ctype_digit((string)$data['ficha_id'])) {
+                respond(['error' => 'Selecciona una de tus fichas asignadas.'], 422);
+            }
+            $assignedFicha = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+            $assignedFicha->execute([(int)$data['ficha_id'], (int)$actor['id']]);
+            if (!$assignedFicha->fetchColumn()) {
+                respond(['error' => 'Solo puedes gestionar horarios de tus fichas asignadas.'], 403);
+            }
+        }
         if ($route === 'users' && (!isset($data['password']) || !isset($data['rol_id']))) {
             respond(['error' => 'Se requieren rol_id y password al crear un usuario.'], 422);
         }
@@ -1340,26 +1819,212 @@ try {
         if ($route === 'attendance' || $route === 'novelties') {
             $data['registrado_por'] = $actor['id'];
         }
+        if ($route === 'novelties' && $actor['rol'] === 'instructor') {
+            $studentAssignment = $db->prepare('SELECT 1 FROM fichas_usuarios fu
+                JOIN fichas_instructores fi ON fi.ficha_id = fu.ficha_id
+                WHERE fu.usuario_id = ? AND fi.instructor_id = ?');
+            $studentAssignment->execute([(int)($data['usuario_id'] ?? 0), (int)$actor['id']]);
+            if (!$studentAssignment->fetchColumn()) {
+                respond(['error' => 'Solo puedes registrar novedades de aprendices de tus fichas asignadas.'], 403);
+            }
+        }
         saveResource($db, $resource['table'], $resource['fields'], $data, null, $actor);
     }
     if (in_array($method, ['PUT','PATCH'], true) && $id !== null) {
         $data = body();
+        if ($route === 'fichas') {
+            $existingFicha = $db->prepare('SELECT codigo, programa, fecha_inicio, fecha_fin FROM fichas WHERE id = ?');
+            $existingFicha->execute([$id]);
+            $currentFicha = $existingFicha->fetch();
+            if (!$currentFicha) {
+                respond(['error' => 'Registro no encontrado.'], 404);
+            }
+            validateFichaInput($data, $currentFicha);
+            if (isset($data['codigo'])) {
+                $duplicateCode = $db->prepare('SELECT 1 FROM fichas WHERE codigo = ? AND id <> ?');
+                $duplicateCode->execute([$data['codigo'], $id]);
+                if ($duplicateCode->fetchColumn()) {
+                    respond(['error' => 'Ya existe otra ficha con ese número.'], 409);
+                }
+            }
+        }
+        if ($route === 'ficha-assignments') {
+            $existingAssignment = $db->prepare('SELECT ficha_id, instructor_id FROM fichas_instructores WHERE id = ?');
+            $existingAssignment->execute([$id]);
+            $currentAssignment = $existingAssignment->fetch();
+            if (!$currentAssignment) {
+                respond(['error' => 'La asignación no existe.'], 404);
+            }
+            $assignment = array_merge($currentAssignment, $data);
+            foreach (['ficha_id','instructor_id'] as $field) {
+                if (!ctype_digit((string)$assignment[$field]) || (int)$assignment[$field] < 1) {
+                    respond(['error' => 'Selecciona una ficha y un instructor válidos.'], 422);
+                }
+            }
+            $validFicha = $db->prepare("SELECT 1 FROM fichas
+                WHERE id = ? AND fecha_inicio <= CURRENT_DATE() AND fecha_fin >= CURRENT_DATE()");
+            $validFicha->execute([(int)$assignment['ficha_id']]);
+            $validInstructor = $db->prepare("SELECT 1 FROM usuarios u JOIN roles r ON r.id = u.rol_id
+                WHERE u.id = ? AND u.activo = 1 AND r.nombre = 'instructor'");
+            $validInstructor->execute([(int)$assignment['instructor_id']]);
+            if (!$validFicha->fetchColumn() || !$validInstructor->fetchColumn()) {
+                respond(['error' => 'Solo puedes asignar instructores activos a fichas activas.'], 422);
+            }
+            $duplicateAssignment = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ? AND id <> ?');
+            $duplicateAssignment->execute([(int)$assignment['ficha_id'], (int)$assignment['instructor_id'], $id]);
+            if ($duplicateAssignment->fetchColumn()) {
+                respond(['error' => 'Ese instructor ya está asignado a la ficha seleccionada.'], 409);
+            }
+        }
+        if ($route === 'schedules' && $actor['rol'] === 'instructor') {
+            $existingSchedule = $db->prepare('SELECT ficha_id FROM horarios WHERE id = ?');
+            $existingSchedule->execute([$id]);
+            $scheduleFicha = $existingSchedule->fetchColumn();
+            $targetFichaId = (int)($data['ficha_id'] ?? $scheduleFicha);
+            $assignedFicha = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+            $assignedFicha->execute([$targetFichaId, (int)$actor['id']]);
+            if (!$scheduleFicha || !$assignedFicha->fetchColumn()) {
+                respond(['error' => 'Solo puedes gestionar horarios de tus fichas asignadas.'], 403);
+            }
+        }
+        if ($route === 'novelties' && $actor['rol'] === 'instructor') {
+            $existingNovelty = $db->prepare('SELECT usuario_id FROM novedades WHERE id = ?');
+            $existingNovelty->execute([$id]);
+            $studentId = (int)($data['usuario_id'] ?? $existingNovelty->fetchColumn());
+            $studentAssignment = $db->prepare('SELECT 1 FROM fichas_usuarios fu
+                JOIN fichas_instructores fi ON fi.ficha_id = fu.ficha_id
+                WHERE fu.usuario_id = ? AND fi.instructor_id = ?');
+            $studentAssignment->execute([$studentId, (int)$actor['id']]);
+            if ($studentId < 1 || !$studentAssignment->fetchColumn()) {
+                respond(['error' => 'Solo puedes modificar novedades de aprendices de tus fichas asignadas.'], 403);
+            }
+        }
         if ($route === 'attendance' && $actor['rol'] === 'estudiante') {
             respond(['error' => 'No puede modificar asistencias.'], 403);
         }
         saveResource($db, $resource['table'], $resource['fields'], $data, $id, $actor);
     }
     if ($method === 'DELETE' && $id !== null &&
-        ($actor['rol'] === 'administrador' || $route === 'attendance' && $actor['rol'] === 'instructor')) {
+        ($actor['rol'] === 'administrador' ||
+            $actor['rol'] === 'instructor' && in_array($route, ['attendance','schedules'], true))) {
         if ($route === 'blocks') {
             respond(['error' => 'El historial de bloqueos se conserva; use la acción Desbloquear.'], 409);
         }
-        $stmt = $db->prepare("DELETE FROM {$resource['table']} WHERE id = ?");
-        $stmt->execute([$id]);
-        if (!$stmt->rowCount()) {
-            respond(['error' => 'Registro no encontrado.'], 404);
+        $db->beginTransaction();
+        try {
+            $removalNotice = null;
+            if ($route === 'attendance') {
+                $attendance = $db->prepare('SELECT usuario_id, ficha_id, horario_id, fecha, estado, observacion FROM asistencias WHERE id = ?');
+                $attendance->execute([$id]);
+                $removalNotice = $attendance->fetch();
+                if ($actor['rol'] === 'instructor' && $removalNotice) {
+                    $assignedFicha = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+                    $assignedFicha->execute([(int)$removalNotice['ficha_id'], (int)$actor['id']]);
+                    if (!$assignedFicha->fetchColumn()) {
+                        $db->rollBack();
+                        respond(['error' => 'Solo puedes eliminar asistencias de tus fichas asignadas.'], 403);
+                    }
+                }
+            } elseif ($route === 'enrollments') {
+                $enrollment = $db->prepare("SELECT fu.ficha_id, fu.usuario_id, f.codigo, f.nombre,
+                        CONCAT(u.nombres, ' ', u.apellidos) AS estudiante
+                    FROM fichas_usuarios fu JOIN fichas f ON f.id = fu.ficha_id
+                    JOIN usuarios u ON u.id = fu.usuario_id WHERE fu.id = ?");
+                $enrollment->execute([$id]);
+                $record = $enrollment->fetch();
+                if ($record) {
+                    $staff = $db->prepare("SELECT u.id FROM usuarios u JOIN roles r ON r.id = u.rol_id
+                        WHERE u.activo = 1 AND (
+                            r.nombre = 'administrador'
+                            OR r.nombre = 'instructor' AND EXISTS (
+                                SELECT 1 FROM fichas_instructores fi
+                                WHERE fi.ficha_id = ? AND fi.instructor_id = u.id
+                            )
+                        )");
+                    $staff->execute([(int)$record['ficha_id']]);
+                    $removalNotice = [
+                        'recipients' => array_merge($staff->fetchAll(PDO::FETCH_COLUMN), [(int)$record['usuario_id']]),
+                        'title' => 'Actualización de asignación de ficha',
+                        'message' => $record['estudiante'] . ' ya no está asignado a la ficha '
+                            . $record['codigo'] . ' · ' . $record['nombre'],
+                    ];
+                }
+            } elseif ($route === 'schedules') {
+                $schedule = $db->prepare("SELECT h.ficha_id, h.asignatura, h.dia_semana, h.hora_inicio, h.hora_fin,
+                        f.codigo, f.nombre, a.nombre AS ambiente,
+                        CONCAT(u.nombres, ' ', u.apellidos) AS instructor
+                    FROM horarios h JOIN fichas f ON f.id = h.ficha_id
+                    JOIN ambientes a ON a.id = h.ambiente_id
+                    JOIN usuarios u ON u.id = h.instructor_id WHERE h.id = ?");
+                $schedule->execute([$id]);
+                $record = $schedule->fetch();
+                if ($record) {
+                    if ($actor['rol'] === 'instructor') {
+                        $assignedFicha = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+                        $assignedFicha->execute([(int)$record['ficha_id'], (int)$actor['id']]);
+                        if (!$assignedFicha->fetchColumn()) {
+                            $db->rollBack();
+                            respond(['error' => 'Solo puedes eliminar horarios de tus fichas asignadas.'], 403);
+                        }
+                    }
+                    $days = [1=>'lunes',2=>'martes',3=>'miércoles',4=>'jueves',5=>'viernes',6=>'sábado',7=>'domingo'];
+                    $removalNotice = [
+                        'recipients' => formationRecipientIds($db, (int)$record['ficha_id']),
+                        'title' => 'Horario eliminado',
+                        'message' => 'Se eliminó la asignatura ' . $record['asignatura']
+                            . "\nDía: " . ($days[(int)$record['dia_semana']] ?? 'Sin día')
+                            . "\nHorario: " . substr($record['hora_inicio'], 0, 5) . ' a ' . substr($record['hora_fin'], 0, 5)
+                            . "\nAmbiente: " . $record['ambiente']
+                            . "\nInstructor: " . $record['instructor']
+                            . "\nFicha: " . $record['codigo'] . ' · ' . $record['nombre'],
+                    ];
+                }
+            }
+            if ($route === 'schedules') {
+                $attendanceCount = $db->prepare('SELECT COUNT(*) FROM asistencias WHERE horario_id = ?');
+                $attendanceCount->execute([$id]);
+                if ((int)$attendanceCount->fetchColumn() > 0) {
+                    $db->rollBack();
+                    respond(['error' => 'No se puede eliminar un horario con asistencias registradas; edítalo para conservar el historial.'], 409);
+                }
+            }
+            if ($route === 'fichas') {
+                $db->prepare('DELETE n FROM novedades n
+                    JOIN asistencias a ON a.id = n.asistencia_id
+                    WHERE a.ficha_id = ?')->execute([$id]);
+                $db->prepare('DELETE FROM asistencias WHERE ficha_id = ?')->execute([$id]);
+                $db->prepare('DELETE FROM horarios WHERE ficha_id = ?')->execute([$id]);
+                $db->prepare('DELETE FROM fichas_usuarios WHERE ficha_id = ?')->execute([$id]);
+                $db->prepare('DELETE FROM fichas_instructores WHERE ficha_id = ?')->execute([$id]);
+                $db->prepare('DELETE FROM solicitudes_ficha WHERE ficha_id = ?')->execute([$id]);
+            }
+            $stmt = $db->prepare("DELETE FROM {$resource['table']} WHERE id = ?");
+            $stmt->execute([$id]);
+            if (!$stmt->rowCount()) {
+                $db->rollBack();
+                respond(['error' => 'Registro no encontrado.'], 404);
+            }
+            audit($db, (int)$actor['id'], 'eliminar', $resource['table'], $id);
+            if ($route === 'attendance' && $removalNotice) {
+                notifyAttendance(
+                    $db,
+                    (int)$removalNotice['usuario_id'],
+                    (int)$removalNotice['ficha_id'],
+                    $removalNotice['horario_id'] === null ? null : (int)$removalNotice['horario_id'],
+                    'eliminada (antes: ' . $removalNotice['estado'] . ')',
+                    (string)$removalNotice['fecha'],
+                    $removalNotice['observacion'] === null ? 'Se eliminó este registro de asistencia.' : (string)$removalNotice['observacion']
+                );
+            } elseif ($removalNotice && isset($removalNotice['recipients'])) {
+                notifyUsers($db, $removalNotice['recipients'], $removalNotice['title'], $removalNotice['message']);
+            }
+            $db->commit();
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $exception;
         }
-        audit($db, (int)$actor['id'], 'eliminar', $resource['table'], $id);
         respond(['data' => ['deleted' => true]]);
     }
     respond(['error' => 'Metodo no permitido para esta ruta.'], 405);

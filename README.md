@@ -25,8 +25,28 @@ actualiza sus indicadores cada 8 segundos.
    `database/actualizar_administrador.sql`,
    `database/actualizar_solicitudes_registro.sql` y
    `database/actualizar_carnets_qr.sql` y
-   `database/actualizar_verificacion_correo.sql`; estas actualizaciones
-   conservan las tablas y los demás datos existentes.
+   `database/actualizar_verificacion_correo.sql`, además de las migraciones
+   pendientes en `database/migrations/`; estas actualizaciones conservan las
+   tablas y los demás datos existentes. Antes de importar una migración,
+   genera un respaldo completo de la base.
+   Para aplicar la formación y asistencia por clase, respalda primero la base,
+   selecciona `proyecto01` en phpMyAdmin y ejecuta una sola vez
+   `database/migrations/002_formacion_asistencia_por_clase.sql`.
+   Para asignar fichas a instructores y permitir que los estudiantes elijan
+   su ficha al registrarse, respalda primero la base y ejecuta una sola vez
+   `database/migrations/003_asignaciones_instructores_fichas.sql`. Esta
+   migración conserva los datos e incorpora las asignaciones que ya aparecen
+   en los horarios.
+   Para cambiar el módulo al número de ficha de 10 dígitos y limpiar las
+   fichas existentes, respalda la base y ejecuta una sola vez
+   `database/migrations/004_fichas_numero_10_digitos.sql`. Se borran las fichas,
+   sus inscripciones, horarios, asistencias, asignaciones y solicitudes
+   relacionadas, pero se conservan las cuentas de usuario. Para pasar después
+   a números de 7 dígitos y calcular automáticamente el estado según las fechas,
+   respalda la base y ejecuta una sola vez
+   `database/migrations/005_fichas_numero_7_digitos.sql`; esta migración no
+   elimina registros y se detiene sin cambiar los números si encuentra alguno
+   que no tenga exactamente siete dígitos.
 4. En una terminal, ejecuta `composer install` desde
    `C:\xampp\htdocs\gestion` para habilitar PHPMailer, Dompdf y PhpSpreadsheet.
 5. Si MySQL usa credenciales distintas de las predeterminadas de XAMPP, configura
@@ -99,17 +119,36 @@ brote, junto con la identidad visual verde y el lema
 «Formación · Servicio · Oportunidades». El emblema web está en
 `web/assets/images/portal-mark.svg`; Android lo dibuja con Flutter.
 
-En **Registrar como**, las personas ingresan documento, teléfono, nombres,
-apellidos, correo electrónico y contraseña. Pueden agregar una foto propia
-opcional para el carné (JPG, PNG o WEBP, máximo 1 MB). Al terminar se genera un
-carné QR descargable como PNG. Los estudiantes quedan activos; las solicitudes
-de instructores y portería necesitan aprobación en **Solicitudes de registro**.
-El registro público no permite crear administradores: los crea un administrador
-ya autenticado. Antes de crear la cuenta, se envía un código de seis dígitos al
-correo indicado; solo se completa el registro después de introducir el código.
-El código vence en 15 minutos y permite hasta cinco intentos. La persona debe
-poder recibir mensajes en esa dirección; escribir una dirección válida no
-demuestra por sí solo que exista o pertenezca al usuario.
+En **Registrar como**, los estudiantes eligen una ficha vigente creada por
+administración. Cada ficha usa un número de exactamente siete dígitos numéricos.
+Su estado se calcula por las fechas: **Programada** antes del inicio, **Activa**
+durante el rango y **Terminada** después de la fecha fin.
+Administración puede
+asignar fichas a instructores en **Instructores por ficha**, y cada instructor
+puede consultar los aprendices inscritos en sus fichas asignadas. La gestión de
+usuarios también permite separar las cuentas por rol.
+
+Solo administración puede abrir **Fichas y programas**, **Instructores por
+ficha** y **Asignación de aprendices**. El instructor consulta y registra
+asistencia desde **Progreso de estudiantes**: busca una ficha asignada por
+programa o número y ve sus aprendices, el porcentaje de asistencia acumulado y
+el registro diario. La ficha se elige de un desplegable visual con sus fichas
+activas asignadas; los accesos separados a **Asistencia** y **Novedades** no se
+muestran al instructor. El progreso incluye un gráfico circular, una barra y
+el resumen de presentes, faltas, retrasos y permisos por aprendiz. La fecha de
+asistencia se toma automáticamente del día actual; el porcentaje no incluye
+tareas porque el sistema no registra entregas.
+Allí también puede revisar la ocupación semanal de los ambientes. La disponibilidad se calcula con todos los horarios
+vigentes; los detalles de asignatura, ficha e instructor solo se muestran para
+las fichas asignadas al instructor.
+
+Las personas ingresan documento, teléfono, nombres, apellidos, correo
+electrónico y contraseña. Pueden agregar una foto propia opcional para el carné
+(JPG, PNG o WEBP, máximo 1 MB). Al terminar se genera un carné QR descargable
+como PNG. Los estudiantes quedan activos; las solicitudes de instructores y
+portería necesitan aprobación en **Solicitudes de registro**. El registro
+público no permite crear administradores: los crea un administrador ya
+autenticado y no requiere confirmar el correo electrónico.
 
 Estudiantes, instructores, portería y administradores inician sesión escaneando
 el QR de su carné o eligiendo una imagen que lo contenga. La cámara requiere
@@ -144,35 +183,58 @@ Otras cuentas de demostración (la contraseña de ambas es `password`):
 Las credenciales son exclusivamente para desarrollo local: cámbialas antes de
 usar información real.
 
-### Verificación y recuperación por correo
+### Recuperación por correo
 
-Después de `composer install`, configura SMTP para Apache. Para Gmail, activa la
-verificación en dos pasos en la cuenta remitente y crea una contraseña de
-aplicación desde la configuración de seguridad de Google. Guarda esa contraseña
-solo en la configuración local protegida de Apache; no la pongas en Git, en el
-código ni la compartas en el chat. Usa el mismo Gmail como remitente.
+El registro de estudiantes ya no requiere confirmar el correo ni depende de
+SMTP. Las solicitudes de instructores y portería siguen pendientes de
+aprobación administrativa. Para recuperar contraseñas, configura SMTP en Apache
+para la cuenta Gmail o Hotmail/Outlook que enviará los mensajes. El enlace se
+envía a la dirección registrada en cada cuenta, sea administrador, estudiante,
+instructor o portería.
 
-En `C:\xampp\apache\conf\extra\httpd-xampp.conf`, agrega estas líneas con tus
-datos (reemplaza los valores de ejemplo) y reinicia Apache. Ese archivo es local
-y no debe subirse al repositorio:
+Para Gmail, activa la verificación en dos pasos y genera una contraseña de
+aplicación desde la configuración de seguridad de Google. Para Hotmail/Outlook,
+usa `smtp-mail.outlook.com`, el puerto `587` con STARTTLS y una contraseña de
+aplicación si Microsoft la solicita; el acceso SMTP debe estar permitido en la
+cuenta. No uses la contraseña habitual si el proveedor requiere una contraseña
+de aplicación.
+
+En `C:\xampp\apache\conf\extra\httpd-xampp.conf`, agrega **solo uno** de estos
+bloques con los datos de la cuenta remitente y reinicia Apache. El archivo es
+local: no lo subas a Git ni compartas la contraseña.
+
+Gmail:
 
 ```apache
 SetEnv SMTP_HOST smtp.gmail.com
 SetEnv SMTP_PORT 587
 SetEnv SMTP_SECURE tls
 SetEnv SMTP_USER tu-cuenta@gmail.com
-SetEnv SMTP_PASSWORD TU_CONTRASENA_DE_APLICACION
+SetEnv SMTP_PASSWORD CONTRASENA_DE_APLICACION
 SetEnv SMTP_FROM tu-cuenta@gmail.com
 SetEnv APP_URL http://localhost/gestion
 ```
 
-También se admite SSL con puerto `465` y `SMTP_SECURE=ssl`. `APP_URL` debe ser
-la dirección base pública de la aplicación cuando se use fuera de este equipo.
-El formulario de recuperación siempre envía un enlace de un solo uso al correo
-registrado; vence en 30 minutos. La respuesta de la pantalla no revela si una
-dirección está asociada a una cuenta. Si PHPMailer o SMTP no están configurados
-o el servidor de correo no acepta el mensaje, la API muestra un error y no
-ofrece enlaces locales.
+Hotmail/Outlook:
+
+```apache
+SetEnv SMTP_HOST smtp-mail.outlook.com
+SetEnv SMTP_PORT 587
+SetEnv SMTP_SECURE tls
+SetEnv SMTP_USER tu-cuenta@hotmail.com
+SetEnv SMTP_PASSWORD CONTRASENA_DE_APLICACION
+SetEnv SMTP_FROM tu-cuenta@hotmail.com
+SetEnv APP_URL http://localhost/gestion
+```
+
+La pantalla de inicio permite solicitar la recuperación para cualquiera de los
+roles. El correo identifica el tipo de cuenta y contiene el botón **Actualizar
+contraseña**. El enlace es de un solo uso y vence en 30 minutos. Si la aplicación
+se usa fuera de este equipo, cambia `APP_URL` por su dirección pública para que
+el enlace enviado pueda abrirse. La respuesta de la pantalla no revela si una
+dirección está asociada a una cuenta; si SMTP no acepta el envío, se informa que
+hay que revisar la configuración y el motivo técnico queda en el registro de
+errores de PHP.
 
 ### Copias de seguridad
 
@@ -215,6 +277,15 @@ El endpoint `/health` sirve para comprobar el servicio.
   `POST /auth/logout`, `GET /auth/me`
 - `POST /auth/recovery`, `POST /auth/reset-password`
 - `GET /dashboard`, `GET /attendance/alerts`, `POST /attendance/mark`
+- `GET /attendance/roster?ambiente_id=ID&ficha_id=ID&horario_id=ID&fecha=YYYY-MM-DD`
+  para que administración e instructores registren asistencias por clase y en
+  cualquier fecha. Las fichas, programas y trimestres se administran desde
+  **Fichas y programas**; luego se asignan aprendices desde **Asignación de
+  aprendices** y se asocian ambientes, instructores y asignaturas en
+  **Horarios**. El aprendiz consulta su propio horario, historial y
+  notificaciones; no selecciona ambiente ni ficha al registrarse.
+- `GET /attendance/progress` para el resumen global de aprendices y
+  `GET /attendance/progress?usuario_id=ID` para su historial detallado.
 - `GET /attendance?desde=YYYY-MM-DD&hasta=YYYY-MM-DD` para consultar por rango
 - CRUD por colección: `users`, `environments`, `fichas`, `enrollments`,
   `cards`, `maintenance`, `schedules`, `reservations`, `attendance`,
@@ -228,9 +299,12 @@ El endpoint `/health` sirve para comprobar el servicio.
   el QR del carnet del responsable y el tipo de movimiento.
 
 Los nombres exactos de campos, roles por endpoint y validaciones se encuentran
-en `api/index.php`; los usuarios se filtran por ficha y las asistencias por
-identidad. La API rechaza cruces de reservas y horarios, registra auditoría y
-aplica claves foráneas/índices únicos del esquema.
+en `api/index.php`. Las asistencias y horarios del aprendiz se limitan a sus
+fichas; administración e instructores pueden gestionar aprendices del centro.
+Los avisos personales se guardan en la aplicación para el estudiante y el
+personal correspondiente cuando cambia una asistencia, una ficha, una
+asignación o un horario. La API rechaza cruces de reservas y horarios, registra
+auditoría y aplica claves foráneas/índices únicos del esquema.
 
 ## Alcance de esta primera versión
 

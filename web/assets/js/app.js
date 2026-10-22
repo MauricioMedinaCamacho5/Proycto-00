@@ -1,12 +1,13 @@
 const API = 'api';
 const modules = {
   'registration-requests': {label:'Solicitudes de registro', icon:'✉', roles:['administrador'], fields:[]},
-  'student-progress': {label:'Progreso de estudiantes', icon:'◉', roles:['instructor'], fields:[]},
-  users: {label:'Usuarios', icon:'♙', roles:['administrador'], fields:[['rol_id','Rol (1 admin, 2 instructor, 3 estudiante, 4 portero)','number'],['documento','Documento'],['nombres','Nombres'],['apellidos','Apellidos'],['correo','Correo','email'],['password','Contraseña (mínimo 8 caracteres)','password'],['telefono','Teléfono']]},
-  environments: {label:'Ambientes', icon:'⌂', roles:['administrador'], fields:[['codigo','Código'],['nombre','Nombre'],['ubicacion','Ubicación'],['capacidad','Capacidad','number'],['estado','Estado (disponible/ocupado/mantenimiento)'],['descripcion','Descripción']]},
-  fichas: {label:'Fichas', icon:'▤', roles:['administrador','instructor'], fields:[['codigo','Código'],['nombre','Nombre'],['fecha_inicio','Fecha inicio','date'],['fecha_fin','Fecha fin','date'],['estado','Estado (activa/finalizada/suspendida)']]},
-  schedules: {label:'Horarios', icon:'◷', roles:['administrador','instructor','estudiante'], fields:[['ficha_id','ID ficha','number'],['ambiente_id','ID ambiente','number'],['instructor_id','ID instructor','number'],['dia_semana','Día (1=lun, 7=dom)','number'],['hora_inicio','Hora inicio','time'],['hora_fin','Hora fin','time'],['asignatura','Asignatura']]},
-  enrollments: {label:'Inscripciones a fichas', icon:'♧', roles:['administrador'], fields:[['ficha_id','ID ficha','number'],['usuario_id','ID estudiante','number']]},
+  'student-progress': {label:'Progreso de estudiantes', icon:'◉', roles:['administrador','instructor'], fields:[]},
+  users: {label:'Usuarios', icon:'♙', roles:['administrador'], fields:[['rol_id','Rol','select'],['documento','Documento'],['nombres','Nombres'],['apellidos','Apellidos'],['correo','Correo','email'],['password','Contraseña (mínimo 8 caracteres)','password'],['telefono','Teléfono']]},
+  environments: {label:'Ambientes', icon:'⌂', roles:['administrador','instructor'], fields:[['codigo','Código'],['nombre','Nombre'],['ubicacion','Ubicación'],['capacidad','Capacidad','number'],['estado','Estado (disponible/ocupado/mantenimiento)'],['descripcion','Descripción']]},
+  fichas: {label:'Fichas y programas', icon:'▤', roles:['administrador'], fields:[['codigo','Número de ficha (7 dígitos)'],['programa','Programa'],['fecha_inicio','Fecha de inicio','date'],['fecha_fin','Fecha de fin','date']]},
+  'ficha-assignments': {label:'Instructores por ficha', icon:'♧', roles:['administrador'], fields:[['ficha_id','Ficha','number'],['instructor_id','Instructor','number']]},
+  schedules: {label:'Horarios', icon:'◷', roles:['administrador','instructor','estudiante'], fields:[['ficha_id','Ficha / programa','number'],['ambiente_id','Ambiente','number'],['instructor_id','Instructor','number'],['dia_semana','Día','select'],['hora_inicio','Hora inicio','time'],['hora_fin','Hora fin','time'],['asignatura','Asignatura']]},
+  enrollments: {label:'Asignación de aprendices', icon:'♧', roles:['administrador'], fields:[['ficha_id','Ficha / programa','number'],['usuario_id','Aprendiz','number']]},
   cards: {label:'Carnets digitales', icon:'▣', roles:['administrador','estudiante'], fields:[['usuario_id','ID usuario','number'],['vence_en','Fecha de vencimiento','date']]},
   reservations: {label:'Reservas', icon:'▦', roles:['administrador'], fields:[['ambiente_id','ID ambiente','number'],['usuario_id','ID responsable','number'],['inicio','Inicio','datetime-local'],['fin','Fin','datetime-local'],['motivo','Motivo']]},
   attendance: {label:'Asistencia', icon:'✓', roles:['administrador','instructor','estudiante'], fields:[['usuario_id','ID estudiante','number'],['ficha_id','ID ficha','number'],['fecha','Fecha','date'],['estado','Estado (presente/ausente/tarde/permiso)'],['observacion','Observación']]},
@@ -21,12 +22,12 @@ const modules = {
   blocks: {label:'Bloqueos de usuarios', icon:'⊘', roles:['administrador'], fields:[['usuario_id','ID usuario','number'],['motivo','Motivo del bloqueo']]}
 };
 const icons = ['◉','⌂','✓','⇄','▣','▦'];
-let currentUser = null, activeModule = null, chart = null, editId = null;
+let currentUser = null, activeModule = null, chart = null, editId = null, userRoleFilter = 'todos';
 let tableRefreshInProgress = false;
 let loginScannerControls = null, loginScannerStarting = false, loginScanCompleted = false, loginExpectedRole = null;
 let generatedCardUrl = null, generatedCardCode = null, generatedCardPendingApproval = false;
-let registrationVerificationPending = false, registrationResendTimer = null;
 let attendanceRoster = [], attendanceFichas = [], editingAttendance = null, progressStudent = null;
+let showWeeklyAvailability = false;
 const $ = (selector) => document.querySelector(selector);
 
 function bogotaDate() {
@@ -39,7 +40,8 @@ function bogotaDate() {
 }
 
 function refreshActiveTable() {
-  if (tableRefreshInProgress || !activeModule || $('#record-dialog').open || document.hidden) return;
+  if (tableRefreshInProgress || !activeModule || $('#record-dialog').open ||
+      $('#attendance-ficha-trigger').getAttribute('aria-expanded') === 'true' || document.hidden) return;
   tableRefreshInProgress = true;
   loadTable().catch(showError).finally(() => { tableRefreshInProgress = false; });
 }
@@ -102,10 +104,7 @@ async function startApp() {
   $('#login-screen').classList.add('hidden');
   $('#app-shell').classList.remove('hidden');
   $('#user-summary').innerHTML = `<div class="user-name">${escapeHtml(currentUser.nombres)} ${escapeHtml(currentUser.apellidos)}</div><div class="user-role">${escapeHtml(currentUser.rol)}</div>`;
-  $('#download-my-card').classList.toggle(
-    'hidden',
-    currentUser.rol === 'administrador' || Number(currentUser.qr_entregado) === 1
-  );
+  $('#download-my-card').classList.remove('hidden');
   renderNavigation();
   try {
     if (currentUser.rol === 'administrador') await showDashboard();
@@ -119,6 +118,7 @@ function renderNavigation() {
   const entries = [];
   if (currentUser.rol === 'administrador') entries.push(['dashboard','Resumen','◈']);
   Object.entries(modules).forEach(([key, item]) => {
+    if (currentUser.rol === 'instructor' && ['attendance','novelties'].includes(key)) return;
     if (item.roles.includes(currentUser.rol) && !(currentUser.rol === 'estudiante' && key === 'cards')) entries.push([key,item.label,item.icon]);
   });
   $('#navigation').innerHTML = entries.map(([key,label,icon]) => `<a href="#${key}" class="nav-link" data-view="${key}"><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span>${key === 'registration-requests' ? '<span class="nav-badge hidden" id="registration-request-count"></span>' : ''}</a>`).join('');
@@ -192,26 +192,243 @@ function setActiveNav(key) {
   $('#navigation').querySelectorAll('.nav-link').forEach(link => link.classList.toggle('active', link.dataset.view === key));
 }
 
+function renderUserRoleFilters() {
+  $('#user-role-filters').querySelectorAll('[data-user-role]').forEach(button => {
+    const selected = button.dataset.userRole === userRoleFilter;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
+}
+
+$('#user-role-filters').addEventListener('click', event => {
+  const button = event.target.closest('[data-user-role]');
+  if (!button) return;
+  userRoleFilter = button.dataset.userRole;
+  renderUserRoleFilters();
+  loadTable().catch(showError);
+});
+
 $('#student-view-history').addEventListener('click', () => showModule('attendance').catch(showError));
 
+function formatDisplayDate(value) {
+  const date = String(value || '').slice(0,10).split('-');
+  return date.length === 3 ? `${date[2]}/${date[1]}/${date[0]}` : String(value || '—');
+}
+
+function fichaSearchLabel(ficha) {
+  return `${ficha.programa || ficha.nombre} · Ficha ${ficha.codigo}`;
+}
+
+function updateAttendanceFichaOptions(fichas, selectedId = '') {
+  attendanceFichas = fichas;
+  const select = $('#attendance-ficha');
+  const options = attendanceFichas.map(ficha =>
+    `<option value="${Number(ficha.id)}">${escapeHtml(fichaSearchLabel(ficha))}</option>`
+  ).join('');
+  if (select.innerHTML !== options) select.innerHTML = options;
+  const selectedFicha = attendanceFichas.find(ficha => String(ficha.id) === String(selectedId)) ||
+    attendanceFichas.find(ficha => String(ficha.id) === select.value) ||
+    attendanceFichas[0];
+  select.value = selectedFicha ? String(selectedFicha.id) : '';
+  $('#attendance-ficha-value').textContent = selectedFicha
+    ? fichaSearchLabel(selectedFicha)
+    : 'No tienes fichas activas asignadas';
+  $('#attendance-ficha-trigger').disabled = attendanceFichas.length < 2;
+  $('#attendance-ficha-options').innerHTML = attendanceFichas.map(ficha => {
+    const description = [ficha.trimestre ? `Trimestre ${Number(ficha.trimestre)}` : '', `Programa de formación`]
+      .filter(Boolean).join(' · ');
+    const isSelected = selectedFicha && Number(ficha.id) === Number(selectedFicha.id);
+    return `<button class="role-picker-option${isSelected ? ' selected' : ''}" type="button" role="option" data-value="${Number(ficha.id)}" aria-selected="${Boolean(isSelected)}">
+      <span class="role-option-icon" aria-hidden="true">▤</span>
+      <span><strong>${escapeHtml(ficha.programa || ficha.nombre)}</strong><small>Ficha ${escapeHtml(ficha.codigo)}${description ? ` · ${escapeHtml(description)}` : ''}</small></span>
+      <span class="role-option-check" aria-hidden="true">✓</span>
+    </button>`;
+  }).join('');
+  $('#attendance-ficha-trigger').setAttribute('aria-label', selectedFicha
+    ? `Ficha seleccionada: ${fichaSearchLabel(selectedFicha)}`
+    : 'No tienes fichas activas asignadas');
+}
+
+function renderStaffProgressOverview(records) {
+  const totals = records.reduce((summary, record) => {
+    summary.presentes += Number(record.presentes || 0);
+    summary.ausencias += Number(record.ausencias || 0);
+    summary.retrasos += Number(record.retrasos || 0);
+    summary.permisos += Number(record.permisos || 0);
+    return summary;
+  }, {presentes:0,ausencias:0,retrasos:0,permisos:0});
+  const evaluated = totals.presentes + totals.ausencias + totals.retrasos;
+  const attended = totals.presentes + totals.retrasos;
+  const rate = evaluated ? Math.round(100 * attended / evaluated) : 0;
+  $('#staff-progress-rate').textContent = `${rate}%`;
+  $('#staff-progress-ring').style.setProperty('--attendance-rate', `${rate}%`);
+  $('#staff-progress-detail').textContent = evaluated
+    ? `${attended} asistencias o retrasos de ${evaluated} registros evaluados. Los permisos no cuentan para el porcentaje.`
+    : 'Aún no hay asistencias registradas.';
+  $('#staff-progress-bar').style.width = `${rate}%`;
+  $('#staff-progress-bar').parentElement.setAttribute('aria-valuenow', String(rate));
+  $('#staff-progress-stats').innerHTML = [
+    ['Asistió',totals.presentes,'present'],
+    ['Faltó',totals.ausencias,'absence'],
+    ['Tarde',totals.retrasos,'late'],
+    ['Permiso',totals.permisos,'permission']
+  ].map(([label,value,kind]) =>
+    `<article class="attendance-stat stat-${kind}"><span>${label}</span><strong>${value}</strong></article>`
+  ).join('');
+}
+
+async function loadAdminStudentProgress() {
+  if (!attendanceFichas.length) {
+    const options = await api('options');
+    attendanceFichas = options.fichas || [];
+  }
+  updateAttendanceFichaOptions(attendanceFichas);
+
+  if (progressStudent) {
+    const params = new URLSearchParams({usuario_id:String(progressStudent.id)});
+    const records = await api(`attendance/progress?${params}`);
+    if (activeModule !== 'student-progress' || progressStudent === null) return;
+    $('#table-title').textContent = `Historial · ${progressStudent.name}`;
+    $('#table-description').textContent = 'Historial de asistencia del aprendiz.';
+    const headings = ['Fecha','Ficha','Programa','Trimestre','Asignatura','Horario','Ambiente','Instructor','Estado','Observación'];
+    $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
+    $('#table-message').innerHTML = '<button type="button" class="button secondary progress-back">← Volver al progreso</button>';
+    $('#table-message').querySelector('.progress-back').addEventListener('click', () => {
+      progressStudent = null;
+      loadAdminStudentProgress().catch(showError);
+    });
+    const labels = {presente:'Asistió',ausente:'Faltó',tarde:'Llegó tarde',permiso:'Permiso'};
+    $('#table-body').innerHTML = records.length
+      ? records.map(record => `<tr>
+          <td>${formatDisplayDate(record.fecha)}</td>
+          <td>${escapeHtml(record.ficha_codigo)} · ${escapeHtml(record.ficha_nombre)}</td>
+          <td>${escapeHtml(record.programa || '—')}</td>
+          <td>${record.trimestre ? `Trimestre ${Number(record.trimestre)}` : '—'}</td>
+          <td>${escapeHtml(record.asignatura || '—')}</td>
+          <td>${record.hora_inicio ? `${escapeHtml(String(record.hora_inicio).slice(0,5))}–${escapeHtml(String(record.hora_fin).slice(0,5))}` : '—'}</td>
+          <td>${escapeHtml(record.ambiente || '—')}</td>
+          <td>${escapeHtml(record.instructor || '—')}</td>
+          <td><span class="attendance-state state-${escapeHtml(record.estado)}">${labels[record.estado] || escapeHtml(record.estado)}</span></td>
+          <td>${escapeHtml(record.observacion || '—')}</td>
+        </tr>`).join('')
+      : '<tr><td class="empty-row" colspan="10">Este aprendiz todavía no tiene asistencias registradas.</td></tr>';
+    return;
+  }
+  const params = new URLSearchParams();
+  if ($('#attendance-ficha').value) params.set('ficha_id', $('#attendance-ficha').value);
+  const records = await api(`attendance/progress?${params}`);
+  if (activeModule !== 'student-progress') return;
+  renderStaffProgressOverview(records);
+  $('#table-title').textContent = 'Progreso de estudiantes';
+  $('#table-description').textContent = 'Porcentaje calculado con la asistencia registrada; las tareas no se registran en este módulo.';
+  const headings = ['Estudiante','Documento','Ficha','Asistió','Faltó','Tarde','Permiso','Asistencia','Historial'];
+  $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
+  $('#table-message').textContent = records.length
+    ? `${records.length} aprendices en la ficha seleccionada`
+    : 'No hay aprendices inscritos en esta ficha activa.';
+  $('#table-body').innerHTML = records.length
+    ? records.map(record => {
+      const present = Number(record.presentes || 0);
+      const absent = Number(record.ausencias || 0);
+      const late = Number(record.retrasos || 0);
+      const evaluated = present + absent + late;
+      const progress = evaluated ? Math.round(100 * (present + late) / evaluated) : 0;
+      return `<tr>
+        <td><strong>${escapeHtml(record.nombres)} ${escapeHtml(record.apellidos)}</strong></td>
+        <td>${escapeHtml(record.documento)}</td>
+        <td>${escapeHtml(record.ficha_codigo)} · ${escapeHtml(record.ficha_nombre)}</td>
+        <td><span class="attendance-state state-presente">${present}</span></td>
+        <td><span class="attendance-state state-ausente">${absent}</span></td>
+        <td><span class="attendance-state state-tarde">${late}</span></td>
+        <td><span class="attendance-state state-permiso">${Number(record.permisos || 0)}</span></td>
+        <td><strong class="progress-value">${progress}%</strong></td>
+        <td><button type="button" class="row-action progress-history" data-progress-student="${Number(record.usuario_id)}" data-student-name="${escapeHtml(`${record.nombres} ${record.apellidos}`)}">Ver historial</button></td>
+      </tr>`;
+    }).join('')
+    : '<tr><td class="empty-row" colspan="9">No hay aprendices inscritos en esta ficha activa.</td></tr>';
+  $('#table-body').querySelectorAll('[data-progress-student]').forEach(button => {
+    button.addEventListener('click', () => {
+      progressStudent = {id:Number(button.dataset.progressStudent),name:button.dataset.studentName};
+      loadAdminStudentProgress().catch(showError);
+    });
+  });
+}
+
+async function loadInstructorAvailability() {
+  const result = await api('schedules/availability');
+  if (activeModule !== 'student-progress' || !showWeeklyAvailability) return;
+  $('#table-title').textContent = 'Disponibilidad semanal de ambientes';
+  $('#table-description').textContent = 'La disponibilidad se calcula con todos los horarios vigentes; los detalles solo muestran tus fichas asignadas.';
+  const headings = ['Ambiente','Día','Disponibilidad','Horarios y fichas asignadas'];
+  $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
+  $('#table-message').textContent = result.length
+    ? `${result.length} espacios y días consultados`
+    : 'No hay ambientes registrados para consultar.';
+  $('#table-body').innerHTML = result.length
+    ? result.map(slot => {
+      const details = slot.horarios.length
+        ? slot.horarios.map(schedule => `<div class="availability-slot">
+            <strong>${escapeHtml(schedule.inicio)}–${escapeHtml(schedule.fin)}</strong>
+            <span>${schedule.ficha_asignada
+              ? `${escapeHtml(schedule.asignatura)} · Ficha ${escapeHtml(schedule.ficha_codigo)} · ${escapeHtml(schedule.instructor)}`
+              : 'Ocupado por otra ficha'}</span>
+          </div>`).join('')
+        : slot.estado === 'mantenimiento'
+          ? 'En mantenimiento'
+          : 'Disponible todo el día';
+      const statusLabel = slot.estado === 'disponible'
+        ? 'Disponible'
+        : slot.estado === 'mantenimiento'
+          ? 'Mantenimiento'
+          : 'Ocupado';
+      return `<tr>
+        <td><strong>${escapeHtml(slot.codigo)} · ${escapeHtml(slot.ambiente)}</strong><br><span class="muted">${escapeHtml(slot.ubicacion)}</span></td>
+        <td>${escapeHtml(slot.dia)}</td>
+        <td><span class="attendance-state availability-state-${escapeHtml(slot.estado)}">${statusLabel}</span></td>
+        <td>${details}</td>
+      </tr>`;
+    }).join('')
+    : '<tr><td class="empty-row" colspan="4">No hay ambientes disponibles.</td></tr>';
+}
+
 async function showModule(key) {
+  if (key === 'users' && activeModule !== 'users') userRoleFilter = 'todos';
+  if (key !== 'student-progress') showWeeklyAvailability = false;
   activeModule = key;
   $('#dashboard-view').classList.add('hidden');
   $('#resource-view').classList.remove('hidden');
   $('#page-title').textContent = modules[key].label;
   $('#page-kicker').textContent = 'GESTIÓN DE MÓDULOS';
   $('#table-title').textContent = modules[key].label;
+  const showingStudentNotifications = key === 'notifications' && currentUser.rol === 'estudiante';
+  $('#table-panel').classList.toggle('notifications-mode', showingStudentNotifications);
+  $('#user-role-filters').classList.toggle('hidden', key !== 'users');
+  $('#notification-list').classList.toggle('hidden', !showingStudentNotifications);
+  $('#staff-progress-overview').classList.toggle('hidden', key !== 'student-progress' ||
+    !['administrador','instructor'].includes(currentUser.rol) || showWeeklyAvailability);
   $('#table-description').textContent = key === 'attendance' && currentUser.rol !== 'estudiante'
-    ? 'Marca la asistencia de la ficha. La lista se ordena automáticamente por nombre y apellido.'
+    ? 'Busca una ficha y consulta o registra la asistencia de sus aprendices para hoy.'
+    : key === 'student-progress' && currentUser.rol === 'instructor'
+    ? 'Consulta el progreso de asistencia de los aprendices de tus fichas asignadas.'
     : key === 'student-progress'
-    ? 'Consulta el resumen de asistencia de los estudiantes inscritos en tus fichas asignadas.'
+    ? 'Consulta el resumen de asistencia de los aprendices inscritos en fichas activas del centro.'
     : key === 'registration-requests'
     ? 'Revisa las solicitudes de instructores y portería antes de activar sus cuentas.'
     : 'Consulta y administra los registros del sistema.';
   $('#student-attendance-overview').classList.toggle('hidden', currentUser.rol !== 'estudiante');
-  $('#attendance-toolbar').classList.toggle('hidden', key !== 'attendance' || currentUser.rol === 'estudiante');
-  $('#add-record').classList.toggle('hidden', key === 'registration-requests' || key === 'attendance' || currentUser.rol === 'estudiante' || key === 'notifications' && currentUser.rol === 'estudiante' || key === 'fichas' && currentUser.rol === 'instructor');
-  $('#export-report').classList.toggle('hidden', key === 'registration-requests' || currentUser.rol === 'estudiante' && !['schedules','attendance','notifications'].includes(key));
+  const progressView = key === 'student-progress' && ['administrador','instructor'].includes(currentUser.rol);
+  const instructorProgress = progressView && currentUser.rol === 'instructor';
+  $('#attendance-toolbar').classList.toggle('hidden', key !== 'attendance' && !progressView || currentUser.rol === 'estudiante');
+  $('#attendance-toolbar').classList.toggle('availability-mode', instructorProgress && showWeeklyAvailability);
+  $('#availability-toggle').classList.toggle('hidden', !instructorProgress);
+  $('#availability-toggle').textContent = showWeeklyAvailability ? 'Volver a aprendices' : 'Disponibilidad semanal de ambientes';
+  $('#add-record').classList.toggle('hidden', key === 'registration-requests' || key === 'attendance' ||
+    currentUser.rol === 'estudiante' ||
+    key === 'notifications' && currentUser.rol === 'estudiante' ||
+    key === 'environments' && currentUser.rol === 'instructor' ||
+    key === 'ficha-assignments' && currentUser.rol === 'instructor');
+  $('#export-report').classList.toggle('hidden', ['registration-requests','student-progress'].includes(key) ||
+    currentUser.rol === 'estudiante' && !['schedules','attendance','notifications'].includes(key));
   $('#report-format').classList.toggle('hidden', key === 'registration-requests');
   setActiveNav(key);
   await loadTable();
@@ -219,8 +436,16 @@ async function showModule(key) {
 
 async function loadTable() {
   const module = activeModule;
-  if (module === 'student-progress' && currentUser.rol === 'instructor') {
-    await loadInstructorProgress();
+  if (module === 'student-progress' && ['administrador','instructor'].includes(currentUser.rol)) {
+    if (currentUser.rol === 'instructor') {
+      if (showWeeklyAvailability) {
+        await loadInstructorAvailability();
+      } else {
+        await loadAttendanceRoster();
+      }
+      return;
+    }
+    await loadAdminStudentProgress();
     return;
   }
   if (module === 'attendance' && currentUser.rol !== 'estudiante') {
@@ -241,7 +466,14 @@ async function loadTable() {
   }
   const data = await api(module);
   if (activeModule !== module) return;
-  const rows = Array.isArray(data) ? data : [];
+  let rows = Array.isArray(data) ? data : [];
+  if (module === 'users') {
+    rows = userRoleFilter === 'todos' ? rows : rows.filter(row => row.rol === userRoleFilter);
+    renderUserRoleFilters();
+  }
+  if (module === 'ficha-assignments' && currentUser.rol === 'instructor') {
+    $('#table-description').textContent = 'Aprendices inscritos en las fichas que tienes asignadas. Administración conserva su acceso general.';
+  }
   if (currentUser.rol === 'estudiante' && module === 'schedules') {
     renderStudentSchedule(rows);
     return;
@@ -260,108 +492,34 @@ async function loadTable() {
   }
 
   async function loadAttendanceRoster() {
-    const selectedDate = $('#attendance-date').value || bogotaDate();
     const selectedFicha = $('#attendance-ficha').value;
-    const selectedEnvironment = $('#attendance-environment').value;
+    const selectedDate = bogotaDate();
     const params = new URLSearchParams({fecha:selectedDate});
     if (selectedFicha) params.set('ficha_id', selectedFicha);
-    if (selectedEnvironment) params.set('ambiente_id', selectedEnvironment);
     const result = await api(`attendance/roster?${params}`);
     attendanceRoster = result.estudiantes || [];
-    attendanceFichas = result.fichas || [];
+    updateAttendanceFichaOptions(result.fichas || [], result.ficha_seleccionada || '');
+    renderStaffProgressOverview(attendanceRoster);
+    $('#staff-progress-overview').classList.toggle('hidden', activeModule !== 'student-progress' || showWeeklyAvailability);
 
-    const environmentSelect = $('#attendance-environment');
-    const environmentOptions = '<option value="">Todos los ambientes</option>' + (result.ambientes || []).map(environment =>
-      `<option value="${Number(environment.id)}">${escapeHtml(environment.codigo)} · ${escapeHtml(environment.nombre)}</option>`
-    ).join('');
-    if (environmentSelect.innerHTML !== environmentOptions) environmentSelect.innerHTML = environmentOptions;
-    environmentSelect.value = result.ambiente_seleccionado ? String(result.ambiente_seleccionado) : '';
-    environmentSelect.disabled = (result.ambientes || []).length < 2;
-
-    const fichaSelect = $('#attendance-ficha');
-    const newOptions = attendanceFichas.map(ficha => `<option value="${Number(ficha.id)}">${escapeHtml(ficha.codigo)} · ${escapeHtml(ficha.nombre)}</option>`).join('');
-    if (fichaSelect.innerHTML !== newOptions) fichaSelect.innerHTML = newOptions;
-    if (result.ficha_seleccionada) fichaSelect.value = String(result.ficha_seleccionada);
-    fichaSelect.disabled = attendanceFichas.length < 2;
+    if (activeModule === 'student-progress') {
+      $('#table-title').textContent = 'Aprendices de mis fichas';
+      $('#table-description').textContent = 'Porcentaje de asistencia acumulada y registro diario de los aprendices de la ficha seleccionada.';
+    }
 
     if (!attendanceFichas.length) {
-      $('#table-message').textContent = 'No hay fichas activas asignadas para registrar asistencia.';
+      $('#table-message').textContent = currentUser.rol === 'instructor'
+        ? 'Administración todavía no te ha asignado fichas activas.'
+        : 'No hay fichas activas para registrar asistencia.';
       $('#table-head').innerHTML = '';
       $('#table-body').innerHTML = '';
       return;
     }
 
-    async function loadInstructorProgress() {
-      if (progressStudent) {
-        await loadInstructorStudentHistory(progressStudent);
-        return;
-      }
-      const records = await api('attendance/progress');
-      if (activeModule !== 'student-progress') return;
-      $('#table-title').textContent = 'Progreso de estudiantes';
-      $('#table-description').textContent = 'Resumen de asistencia en las fichas que tienes asignadas.';
-      const headings = ['Estudiante','Documento','Ficha','Ambiente','Asistió','Faltó','Tarde','Permiso','Progreso','Última clase','Historial'];
-      $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
-      $('#table-message').textContent = records.length
-        ? `${records.length} registros de progreso · solo fichas asignadas a ti`
-        : 'Todavía no hay estudiantes inscritos en tus fichas asignadas.';
-      $('#table-body').innerHTML = records.length
-        ? records.map(record => {
-          const present = Number(record.presentes || 0);
-          const absent = Number(record.ausencias || 0);
-          const late = Number(record.retrasos || 0);
-          const evaluated = present + absent + late;
-          const progress = evaluated ? Math.round(100 * (present + late) / evaluated) : 0;
-          return `<tr>
-            <td><strong>${escapeHtml(record.nombres)} ${escapeHtml(record.apellidos)}</strong></td>
-            <td>${escapeHtml(record.documento)}</td>
-            <td>${escapeHtml(record.ficha_codigo)} · ${escapeHtml(record.ficha_nombre)}</td>
-            <td>${escapeHtml(record.ambientes || 'Sin ambiente asignado')}</td>
-            <td><span class="attendance-state state-presente">${present}</span></td>
-            <td><span class="attendance-state state-ausente">${absent}</span></td>
-            <td><span class="attendance-state state-tarde">${late}</span></td>
-            <td><span class="attendance-state state-permiso">${Number(record.permisos || 0)}</span></td>
-            <td><strong class="progress-value">${progress}%</strong></td>
-            <td>${record.ultima_clase ? formatDisplayDate(record.ultima_clase) : 'Sin registros'}</td>
-            <td><button type="button" class="row-action progress-history" data-progress-student="${Number(record.usuario_id)}" data-student-name="${escapeHtml(`${record.nombres} ${record.apellidos}`)}">Ver historial</button></td>
-          </tr>`;
-        }).join('')
-        : '<tr><td class="empty-row" colspan="11">Todavía no hay estudiantes inscritos en tus fichas asignadas.</td></tr>';
-      $('#table-body').querySelectorAll('[data-progress-student]').forEach(button => {
-        button.addEventListener('click', () => {
-          progressStudent = {id:Number(button.dataset.progressStudent),name:button.dataset.studentName};
-          loadInstructorProgress().catch(showError);
-        });
-      });
-    }
-
-    async function loadInstructorStudentHistory(student) {
-      const params = new URLSearchParams({usuario_id:String(student.id)});
-      const records = await api(`attendance/progress?${params}`);
-      if (activeModule !== 'student-progress' || progressStudent?.id !== student.id) return;
-      $('#table-title').textContent = `Historial · ${student.name}`;
-      $('#table-description').textContent = 'Asistencia registrada en tus fichas asignadas.';
-      const headings = ['Fecha','Ficha','Ambiente','Estado','Observación'];
-      $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
-      $('#table-message').innerHTML = '<button type="button" class="button secondary progress-back">← Volver al progreso</button>';
-      $('#table-message').querySelector('.progress-back').addEventListener('click', () => {
-        progressStudent = null;
-        loadInstructorProgress().catch(showError);
-      });
-      $('#table-body').innerHTML = records.length
-        ? records.map(record => `<tr>
-            <td>${formatDisplayDate(record.fecha)}</td>
-            <td>${escapeHtml(record.ficha_codigo)} · ${escapeHtml(record.ficha_nombre)}</td>
-            <td>${escapeHtml(record.ambientes || 'Sin ambiente asignado')}</td>
-            <td><span class="attendance-state state-${escapeHtml(record.estado)}">${attendanceStatusLabel(record.estado)}</span></td>
-            <td>${escapeHtml(record.observacion || '—')}</td>
-          </tr>`).join('')
-        : '<tr><td class="empty-row" colspan="5">Este estudiante todavía no tiene asistencias registradas en tus fichas.</td></tr>';
-    }
     $('#table-message').textContent = attendanceRoster.length
-      ? `${attendanceRoster.length} estudiantes · ${result.fecha}`
+      ? `${attendanceRoster.length} aprendices · asistencia del ${formatDisplayDate(result.fecha)}`
       : 'Aún no hay estudiantes inscritos en esta ficha.';
-    const headings = ['N.º','Foto','Nombres','Apellidos','Documento','Asistencia','Carné','Acciones'];
+    const headings = ['N.º','Foto','Nombres','Apellidos','Documento','Progreso de asistencia','Asistencia de hoy','Motivo / observación','Carné','Acciones'];
     $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
     $('#table-body').innerHTML = attendanceRoster.map((student, index) => {
       const photo = student.foto
@@ -380,6 +538,11 @@ async function loadTable() {
       const card = student.codigo_qr
         ? `<button type="button" class="attendance-card-link" data-card-student="${Number(student.id)}">Ver carné</button>`
         : '<span class="muted">Sin carné</span>';
+      const present = Number(student.presentes || 0);
+      const absent = Number(student.ausencias || 0);
+      const late = Number(student.retrasos || 0);
+      const evaluated = present + absent + late;
+      const progress = evaluated ? Math.round(100 * (present + late) / evaluated) : 0;
       const actions = student.asistencia_id
         ? `<button type="button" class="row-action attendance-edit" data-attendance-edit="${Number(student.id)}">Editar / motivo</button><button type="button" class="row-action attendance-delete" data-attendance-delete="${Number(student.id)}">Eliminar</button>`
         : `<button type="button" class="row-action attendance-edit" data-attendance-edit="${Number(student.id)}">Agregar motivo</button>`;
@@ -389,7 +552,13 @@ async function loadTable() {
         <td>${escapeHtml(student.nombres)}</td>
         <td>${escapeHtml(student.apellidos)}</td>
         <td>${escapeHtml(student.documento)}</td>
+        <td><div class="learner-progress">
+          <div class="attendance-ring learner-progress-ring" style="--attendance-rate:${progress}%"><span>${progress}%</span><small>asistencia</small></div>
+          <div class="learner-progress-track" role="progressbar" aria-label="Asistencia de ${escapeHtml(student.nombres)} ${escapeHtml(student.apellidos)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div>
+          <small class="muted">${evaluated ? `${present + late}/${evaluated} clases` : 'Sin asistencias'}</small>
+        </div></td>
         <td><div class="attendance-statuses">${statusButtons}</div></td>
+        <td>${escapeHtml(student.observacion || '—')}</td>
         <td>${card}</td><td><div class="attendance-actions">${actions}</div></td>
       </tr>`;
     }).join('');
@@ -414,11 +583,22 @@ async function loadTable() {
     $('#table-message').textContent = 'Historial ordenado desde la fecha más reciente.';
     $('#table-title').textContent = 'Mi historial de asistencia';
     $('#table-description').textContent = 'Consulta la fecha y el resultado de cada clase registrada.';
-    const headings = ['Fecha','Estado'];
+      const headings = ['Fecha','Estado','Asignatura','Horario','Ambiente','Instructor','Ficha','Programa','Trimestre','Observación'];
     $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
     $('#table-body').innerHTML = records.length
-      ? records.map(record => `<tr><td>${formatDisplayDate(record.fecha)}</td><td><span class="attendance-state state-${escapeHtml(record.estado)}">${attendanceStatusLabel(record.estado)}</span></td></tr>`).join('')
-      : '<tr><td class="empty-row" colspan="2">Aún no hay asistencias registradas.</td></tr>';
+      ? records.map(record => `<tr>
+          <td>${formatDisplayDate(record.fecha)}</td>
+          <td><span class="attendance-state state-${escapeHtml(record.estado)}">${attendanceStatusLabel(record.estado)}</span></td>
+          <td>${escapeHtml(record.asignatura || '—')}</td>
+          <td>${record.hora_inicio ? `${escapeHtml(String(record.hora_inicio).slice(0,5))}–${escapeHtml(String(record.hora_fin).slice(0,5))}` : '—'}</td>
+          <td>${escapeHtml(record.ambiente || '—')}</td>
+          <td>${escapeHtml(record.instructor || '—')}</td>
+          <td>${escapeHtml(record.ficha)} · ${escapeHtml(record.nombre_ficha)}</td>
+          <td>${escapeHtml(record.programa || '—')}</td>
+          <td>${record.trimestre ? `Trimestre ${Number(record.trimestre)}` : '—'}</td>
+          <td>${escapeHtml(record.observacion || '—')}</td>
+        </tr>`).join('')
+      : '<tr><td class="empty-row" colspan="10">Aún no hay asistencias registradas.</td></tr>';
   }
 
   function attendanceStatusLabel(status) {
@@ -428,21 +608,52 @@ async function loadTable() {
   function renderStudentSchedule(rows) {
     $('#table-title').textContent = 'Mi horario de clases';
     $('#table-description').textContent = 'Tus clases organizadas por día y hora.';
-    const headings = ['Día','Horario','Asignatura','Ambiente','Instructor','Ficha'];
+    const headings = ['Día','Horario','Asignatura','Ambiente','Instructor','Ficha','Programa','Trimestre'];
     $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
     $('#table-body').innerHTML = rows.length
-      ? rows.map(row => `<tr><td><span class="schedule-day">${escapeHtml(row.dia)}</span></td><td>${escapeHtml(String(row.hora_inicio).slice(0,5))} – ${escapeHtml(String(row.hora_fin).slice(0,5))}</td><td><strong>${escapeHtml(row.asignatura)}</strong></td><td>${escapeHtml(row.ambiente)}</td><td>${escapeHtml(row.instructor)}</td><td>${escapeHtml(row.ficha)} · ${escapeHtml(row.nombre_ficha)}</td></tr>`).join('')
-      : '<tr><td class="empty-row" colspan="6">Todavía no tienes horarios asignados.</td></tr>';
+      ? rows.map(row => `<tr><td><span class="schedule-day">${escapeHtml(row.dia)}</span></td><td>${escapeHtml(String(row.hora_inicio).slice(0,5))} – ${escapeHtml(String(row.hora_fin).slice(0,5))}</td><td><strong>${escapeHtml(row.asignatura)}</strong></td><td>${escapeHtml(row.ambiente)}</td><td>${escapeHtml(row.instructor)}</td><td>${escapeHtml(row.ficha)} · ${escapeHtml(row.nombre_ficha)}</td><td>${escapeHtml(row.programa || '—')}</td><td>${row.trimestre ? `Trimestre ${Number(row.trimestre)}` : '—'}</td></tr>`).join('')
+      : '<tr><td class="empty-row" colspan="8">Todavía no tienes horarios asignados.</td></tr>';
   }
 
   function renderStudentNotifications(rows) {
     $('#table-title').textContent = 'Mis notificaciones';
-    $('#table-description').textContent = 'Novedades de asistencia y mensajes de la institución.';
-    const headings = ['Fecha','Notificación','Detalle'];
-    $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
-    $('#table-body').innerHTML = rows.length
-      ? rows.map(row => `<tr class="notification-row"><td>${formatDisplayDate(row.creado_en)}</td><td><strong>${escapeHtml(row.titulo)}</strong></td><td class="notification-message">${escapeHtml(row.mensaje)}</td></tr>`).join('')
-      : '<tr><td class="empty-row" colspan="3">No tienes notificaciones por ahora.</td></tr>';
+    $('#table-description').textContent = 'Cada aviso, con su fecha y detalle, en un formato más claro.';
+    $('#table-message').textContent = rows.length
+      ? `${rows.length} ${rows.length === 1 ? 'notificación' : 'notificaciones'} recientes`
+      : '';
+    $('#table-head').innerHTML = '';
+    $('#table-body').innerHTML = '';
+    $('#notification-list').innerHTML = rows.length
+      ? rows.map(row => {
+        const rawDate = String(row.creado_en || '').slice(0, 10);
+        const [year, month, day] = rawDate.split('-');
+        const monthYear = year && month
+          ? new Date(Number(year), Number(month) - 1, 1).toLocaleDateString('es-CO', {month:'long',year:'numeric'})
+          : '';
+        const message = String(row.mensaje || '').trim();
+        const legacyReason = message.match(/Motivo u observación:\s*([\s\S]*)$/i)?.[1]?.trim();
+        const displayMessage = String(row.titulo || '').startsWith('Actualización de asistencia')
+          ? legacyReason
+            ? `Motivo: ${legacyReason}`
+            : message.startsWith('Motivo:')
+              ? message
+              : 'Motivo: No se registró una observación.'
+          : message;
+        return `<article class="notification-card">
+          <div class="notification-date" aria-label="${formatDisplayDate(rawDate)}">
+            <span class="notification-date-label">FECHA</span>
+            <strong>${escapeHtml(day || '—')}</strong>
+            <span>${escapeHtml(monthYear)}</span>
+          </div>
+          <div class="notification-content">
+            <p class="notification-eyebrow">AVISO INSTITUCIONAL</p>
+            <h3>${escapeHtml(row.titulo)}</h3>
+            <p class="notification-message">${escapeHtml(displayMessage)}</p>
+          </div>
+          <span class="notification-indicator" aria-hidden="true"></span>
+        </article>`;
+      }).join('')
+      : '<div class="notification-empty"><span aria-hidden="true">✓</span><strong>Todo al día</strong><p>No tienes notificaciones por ahora.</p></div>';
   }
 
   function formatDisplayDate(value) {
@@ -479,7 +690,7 @@ async function loadTable() {
       await api('attendance/mark', {method:'POST',body:JSON.stringify({
         usuario_id:studentId,
         ficha_id:Number($('#attendance-ficha').value),
-        fecha:$('#attendance-date').value || bogotaDate(),
+        fecha:bogotaDate(),
         estado:status,
         observacion:student.observacion || null
       })});
@@ -497,7 +708,7 @@ async function loadTable() {
     const form = $('#attendance-edit-form');
     form.elements.estado.value = editingAttendance.estado || 'ausente';
     form.elements.observacion.value = editingAttendance.observacion || '';
-    $('#attendance-edit-student').textContent = `${editingAttendance.nombres} ${editingAttendance.apellidos} · ${formatDisplayDate($('#attendance-date').value)}`;
+    $('#attendance-edit-student').textContent = `${editingAttendance.nombres} ${editingAttendance.apellidos} · ${formatDisplayDate(bogotaDate())}`;
     $('#attendance-edit-dialog').querySelector('h2').textContent = editingAttendance.asistencia_id ? 'Editar asistencia y motivo' : 'Registrar asistencia y motivo';
     $('#attendance-edit-message').textContent = '';
     $('#attendance-edit-dialog').showModal();
@@ -527,14 +738,34 @@ async function loadTable() {
       $('#table-message').textContent = error.message;
     }
   }
-  const columns = Object.keys(rows[0]);
-  const allowDelete = currentUser.rol === 'administrador' && !['blocks','registration-requests'].includes(activeModule);
-  const allowEdit = modules[activeModule].roles.includes(currentUser.rol) && currentUser.rol !== 'estudiante' && !(activeModule === 'fichas' && currentUser.rol === 'instructor');
+  const hiddenColumns = {
+    schedules: ['id','ficha_id','ambiente_id','instructor_id','dia_semana'],
+    enrollments: ['id','ficha_id','usuario_id','documento'],
+    users: ['id','rol_id','ultimo_acceso','creado_en'],
+    'ficha-assignments': ['id','ficha_id','instructor_id','estudiante_id'],
+    fichas: ['id'],
+  };
+  const columns = Object.keys(rows[0]).filter(column => !(hiddenColumns[activeModule] || []).includes(column));
+  const headings = {
+    codigo: 'Número de ficha', ficha_codigo: 'Número de ficha', ficha_nombre: 'Ficha', programa: 'Programa', trimestre: 'Trimestre',
+    ambiente_codigo: 'Código ambiente', ambiente: 'Ambiente', instructor: 'Instructor',
+    estudiante: 'Aprendiz', documento: 'Documento', hora_inicio: 'Desde', hora_fin: 'Hasta',
+    dia: 'Día', asignatura: 'Asignatura', inscrito_en: 'Asignado el',
+    rol: 'Tipo de usuario', activo: 'Estado', estudiante_nombres: 'Nombres',
+    estudiante_apellidos: 'Apellidos', aprendices: 'Aprendices asignados',
+  };
+  const allowDelete = (currentUser.rol === 'administrador' || currentUser.rol === 'instructor' && ['enrollments','schedules'].includes(activeModule)) && !['blocks','registration-requests'].includes(activeModule);
+  const allowEdit = modules[activeModule].roles.includes(currentUser.rol) && currentUser.rol !== 'estudiante' &&
+    !(activeModule === 'environments' && currentUser.rol === 'instructor') &&
+    !(activeModule === 'ficha-assignments' && currentUser.rol === 'instructor');
   const canManage = currentUser.rol === 'administrador';
   const hasActions = allowDelete || allowEdit || activeModule === 'registration-requests' && canManage;
-  $('#table-head').innerHTML = `<tr>${columns.map(col => `<th>${escapeHtml(col.replaceAll('_',' '))}</th>`).join('')}${hasActions ? '<th>Acciones</th>' : ''}</tr>`;
+  $('#table-head').innerHTML = `<tr>${columns.map(col => `<th>${escapeHtml(headings[col] || col.replaceAll('_',' '))}</th>`).join('')}${hasActions ? '<th>Acciones</th>' : ''}</tr>`;
   $('#table-body').innerHTML = rows.map(row => {
     const actions = [];
+    if (activeModule === 'fichas' && currentUser.rol === 'administrador') {
+      actions.push(`<button class="row-action ficha-view-action" data-view-ficha="${Number(row.id)}">Ver</button>`);
+    }
     if (allowEdit) actions.push(`<button class="row-action" data-edit="${Number(row.id)}">Editar</button>`);
     if (activeModule === 'registration-requests' && canManage) {
       actions.push(`<button class="row-action request-approve" data-approve="${Number(row.id)}">Aprobar</button>`);
@@ -543,11 +774,19 @@ async function loadTable() {
     if (activeModule === 'blocks' && canManage && !row.desbloqueado_en) actions.push(`<button class="row-action" data-unblock="${Number(row.id)}">Desbloquear</button>`);
     if (activeModule === 'loans' && canManage && row.estado === 'activo') actions.push(`<button class="row-action" data-return="${Number(row.id)}">Marcar devolución</button>`);
     if (allowDelete) actions.push(`<button class="row-action" data-delete="${Number(row.id)}">Eliminar</button>`);
-    return `<tr>${columns.map(col => `<td title="${escapeHtml(row[col])}">${escapeHtml(row[col])}</td>`).join('')}${hasActions ? `<td class="actions-cell"><div class="row-actions">${actions.join('')}</div></td>` : ''}</tr>`;
+    return `<tr>${columns.map(col => {
+      const value = col === 'trimestre' && row[col] ? `Trimestre ${row[col]}` : col === 'dia'
+        ? row[col] : row[col];
+      return `<td title="${escapeHtml(value)}">${escapeHtml(value)}</td>`;
+    }).join('')}${hasActions ? `<td class="actions-cell"><div class="row-actions">${actions.join('')}</div></td>` : ''}</tr>`;
   }).join('');
   $('#table-body').querySelectorAll('[data-edit]').forEach(button => {
     const row = rows.find(record => Number(record.id) === Number(button.dataset.edit));
-    button.addEventListener('click', () => openForm(row));
+    button.addEventListener('click', () => openForm(row).catch(showError));
+  });
+  $('#table-body').querySelectorAll('[data-view-ficha]').forEach(button => {
+    const row = rows.find(record => Number(record.id) === Number(button.dataset.viewFicha));
+    button.addEventListener('click', () => showFichaDetails(row));
   });
   $('#table-body').querySelectorAll('[data-delete]').forEach(button => button.addEventListener('click', () => deleteRecord(Number(button.dataset.delete))));
   $('#table-body').querySelectorAll('[data-unblock]').forEach(button => button.addEventListener('click', () => unblockUser(Number(button.dataset.unblock))));
@@ -556,26 +795,66 @@ async function loadTable() {
   $('#table-body').querySelectorAll('[data-reject]').forEach(button => button.addEventListener('click', () => reviewRegistration(Number(button.dataset.reject), 'reject')));
 }
 
-function fieldInput([name,label,type='text'], value='') {
+function fieldInput([name,label,type='text'], value='', lookups=null) {
+  const relations = {
+    ficha_id: lookups?.fichas?.map(item => [item.id, `${item.codigo} · ${item.programa || item.nombre}${item.trimestre ? ` · Trimestre ${Number(item.trimestre)}` : ''}`]),
+    ambiente_id: lookups?.ambientes?.map(item => [item.id, `${item.codigo} · ${item.nombre}`]),
+    instructor_id: lookups?.instructores?.map(item => [item.id, `${item.nombres} ${item.apellidos} · ${item.documento}`]),
+    usuario_id: activeModule === 'enrollments' ? lookups?.estudiantes?.map(item => [item.id, `${item.nombres} ${item.apellidos} · ${item.documento}`]) : null,
+    rol_id: [[1,'Administrador'],[2,'Instructor'],[3,'Estudiante'],[4,'Portería']],
+  };
+  let selectOptions = null;
+  if (relations[name]) selectOptions = relations[name];
+  else if (name === 'trimestre') selectOptions = [[1,'Trimestre 1'],[2,'Trimestre 2'],[3,'Trimestre 3'],[4,'Trimestre 4'],[5,'Trimestre 5'],[6,'Trimestre 6']];
+  else if (name === 'dia_semana') selectOptions = [[1,'Lunes'],[2,'Martes'],[3,'Miércoles'],[4,'Jueves'],[5,'Viernes'],[6,'Sábado'],[7,'Domingo']];
+  if (selectOptions) {
+    const optional = name === 'trimestre';
+    const options = selectOptions.map(([optionValue,optionLabel]) =>
+      `<option value="${escapeHtml(optionValue)}"${String(value) === String(optionValue) ? ' selected' : ''}>${escapeHtml(optionLabel)}</option>`
+    ).join('');
+    return `<label>${escapeHtml(label)}<select name="${escapeHtml(name)}" ${optional ? '' : 'required'}>${optional ? '<option value="">Sin asignar</option>' : ''}${options}</select></label>`;
+  }
   const inputType = ['number','email','date','time','datetime-local','password'].includes(type) ? type : 'text';
   const optionalIdentity = ['accesses','temporary-permits'].includes(activeModule) && ['usuario_id','visitante_id'].includes(name);
-  const required = ['password','documento','nombres','apellidos','correo','rol_id','codigo','nombre','ubicacion','capacidad','ficha_id','ambiente_id','instructor_id','hora_inicio','hora_fin','asignatura','inicio','fin','motivo','estado','usuario_id','fecha','tipo','serial','categoria','equipo_id','vence_en','dia_semana','desde','hasta'].includes(name) && !(optionalIdentity || activeModule === 'accesses' && name === 'serial');
-  return `<label>${escapeHtml(label)}<input name="${escapeHtml(name)}" type="${inputType}" value="${inputType === 'password' ? '' : escapeHtml(value)}" ${name === 'password' ? 'minlength="8"' : ''} ${required ? 'required' : ''}></label>`;
+  const fichaNumber = activeModule === 'fichas' && name === 'codigo';
+  const required = ['password','documento','nombres','apellidos','correo','rol_id','codigo','nombre','programa','ubicacion','capacidad','ficha_id','ambiente_id','instructor_id','hora_inicio','hora_fin','asignatura','inicio','fin','motivo','estado','usuario_id','fecha','tipo','serial','categoria','equipo_id','vence_en','dia_semana','desde','hasta','fecha_inicio','fecha_fin'].includes(name) && !(optionalIdentity || activeModule === 'accesses' && name === 'serial');
+  return `<label>${escapeHtml(label)}<input name="${escapeHtml(name)}" type="${fichaNumber ? 'text' : inputType}" value="${inputType === 'password' ? '' : escapeHtml(value)}" ${name === 'password' ? 'minlength="8"' : ''} ${fichaNumber ? 'inputmode="numeric" pattern="[0-9]{7}" maxlength="7" minlength="7" title="Escribe exactamente 7 dígitos numéricos."' : ''} ${required ? 'required' : ''}></label>`;
 }
 
-function openForm(record = null) {
+function showFichaDetails(ficha) {
+  if (!ficha) return;
+  $('#ficha-detail-body').innerHTML = `
+    <div class="ficha-detail-number">${escapeHtml(ficha.codigo)}</div>
+    <dl class="ficha-detail-list">
+      <div><dt>Programa</dt><dd>${escapeHtml(ficha.programa || '—')}</dd></div>
+      <div><dt>Fecha de inicio</dt><dd>${escapeHtml(ficha.fecha_inicio || '—')}</dd></div>
+      <div><dt>Fecha de fin</dt><dd>${escapeHtml(ficha.fecha_fin || '—')}</dd></div>
+      <div><dt>Estado</dt><dd>${escapeHtml(ficha.estado || '—')}</dd></div>
+    </dl>`;
+  $('#ficha-detail-dialog').showModal();
+}
+
+async function openForm(record = null) {
   editId = record ? Number(record.id) : null;
   $('#dialog-title').textContent = `${editId ? 'Editar' : 'Nuevo registro'} · ${modules[activeModule].label}`;
   $('#dialog-message').textContent = '';
+  const lookups = ['schedules','enrollments','ficha-assignments'].includes(activeModule) ? await api('options') : null;
   $('#record-fields').innerHTML = modules[activeModule].fields.map(field => {
     const [name] = field;
     let value = record?.[name] ?? '';
     if (field[2] === 'datetime-local' && value) value = String(value).replace(' ', 'T').slice(0,16);
-    const input = fieldInput(field, value);
+    const input = fieldInput(field, value, lookups);
     return editId && name === 'password' ? input.replace(' required', '') : input;
   }).join('');
   $('#record-dialog').showModal();
 }
+
+function closeFichaDetails() {
+  $('#ficha-detail-dialog').close();
+}
+
+$('#close-ficha-detail').addEventListener('click', closeFichaDetails);
+$('#dismiss-ficha-detail').addEventListener('click', closeFichaDetails);
 
 function reviewRegistration(id, decision) {
   const action = decision === 'approve' ? 'aprobar' : 'rechazar y eliminar';
@@ -590,7 +869,10 @@ function reviewRegistration(id, decision) {
 }
 
 async function deleteRecord(id) {
-  if (!window.confirm('¿Eliminar este registro? Esta acción puede estar limitada por relaciones existentes.')) return;
+  const confirmation = activeModule === 'fichas'
+    ? '¿Eliminar esta ficha? También se eliminarán sus aprendices inscritos, horarios, asistencias, asignaciones de instructor y solicitudes. Las cuentas de usuario se conservarán.'
+    : '¿Eliminar este registro? Esta acción puede estar limitada por relaciones existentes.';
+  if (!window.confirm(confirmation)) return;
   try {
     await api(`${activeModule}/${id}`, {method:'DELETE'});
     await loadTable();
@@ -638,7 +920,9 @@ $('#landing-student-login').addEventListener('click', () => showLogin('estudiant
 $('#login-home').addEventListener('click', showLanding);
 $('#landing-staff-login').addEventListener('click', () => showLogin());
 $('#landing-admin-login').addEventListener('click', () => showLogin('administrador'));
-$('#landing-register').addEventListener('click', () => openRegistration());
+$('#landing-register').addEventListener('click', () => openRegistration().catch(error => {
+  $('#landing-message').textContent = error.message;
+}));
 
 function showLanding() {
   stopLoginScanner();
@@ -662,9 +946,19 @@ function showLogin(expectedRole = null) {
   $('#login-screen').classList.remove('hidden');
 }
 
-function openRegistration(role = 'estudiante') {
+async function openRegistration(role = 'estudiante') {
+  const options = await api('auth/registration-options');
+  const fichaSelect = $('#registration-ficha');
   $('#registration-form').reset();
-  resetRegistrationVerification();
+  fichaSelect.innerHTML = '<option value="">Selecciona una ficha activa</option>' + options.fichas.map(ficha =>
+    `<option value="${Number(ficha.id)}">${escapeHtml(ficha.codigo)} · ${escapeHtml(ficha.programa || ficha.nombre)}${ficha.trimestre ? ` · Trimestre ${Number(ficha.trimestre)}` : ''}</option>`
+  ).join('');
+  fichaSelect.disabled = options.fichas.length === 0;
+  $('#registration-ficha-options').innerHTML = options.fichas.map(ficha => {
+    const description = [ficha.programa, ficha.trimestre ? `Trimestre ${Number(ficha.trimestre)}` : ''].filter(Boolean).join(' · ');
+    return `<button class="role-picker-option ficha-picker-option" type="button" role="option" data-value="${Number(ficha.id)}" aria-selected="false"><span class="role-option-icon" aria-hidden="true">▤</span><span><strong>${escapeHtml(ficha.codigo)} · ${escapeHtml(ficha.programa || ficha.nombre)}</strong><small>${escapeHtml(description || 'Ficha de formación activa')}</small></span><span class="role-option-check" aria-hidden="true">✓</span></button>`;
+  }).join('');
+  syncRegistrationFichaPicker();
   updateRegistrationPhotoName();
   $('#registration-role').value = role;
   syncRegistrationRolePicker();
@@ -673,56 +967,6 @@ function openRegistration(role = 'estudiante') {
   $('#registration-message').textContent = '';
   $('#landing-message').textContent = '';
   $('#registration-dialog').showModal();
-}
-
-function resetRegistrationVerification() {
-  if (registrationResendTimer) {
-    clearInterval(registrationResendTimer);
-    registrationResendTimer = null;
-  }
-  registrationVerificationPending = false;
-  $('#registration-fields')?.classList.remove('hidden');
-  $('#registration-verification')?.classList.add('hidden');
-  $('#registration-code').value = '';
-  $('#registration-code').required = false;
-  $('#resend-registration-code').disabled = true;
-  $('#resend-registration-code').textContent = 'Podrás solicitar otro código en 60 s';
-  $('#registration-verification-email').textContent = '';
-  $('#cancel-registration').textContent = 'Cancelar';
-  $('#submit-registration').classList.remove('hidden');
-}
-
-function startRegistrationResendCountdown(seconds = 60) {
-  if (registrationResendTimer) clearInterval(registrationResendTimer);
-  const resend = $('#resend-registration-code');
-  let remaining = seconds;
-  resend.disabled = true;
-  resend.textContent = `Podrás solicitar otro código en ${remaining} s`;
-  registrationResendTimer = setInterval(() => {
-    remaining -= 1;
-    if (remaining <= 0) {
-      clearInterval(registrationResendTimer);
-      registrationResendTimer = null;
-      resend.disabled = false;
-      resend.textContent = 'Reenviar código';
-      return;
-    }
-    resend.textContent = `Podrás solicitar otro código en ${remaining} s`;
-  }, 1000);
-}
-
-function showRegistrationVerification(email) {
-  registrationVerificationPending = true;
-  $('#registration-fields').classList.add('hidden');
-  $('#registration-verification').classList.remove('hidden');
-  $('#registration-verification-email').textContent = email;
-  $('#registration-code').required = true;
-  $('#registration-intro').textContent = 'Ya casi terminas. Confirma que puedes recibir mensajes en este correo para activar tu cuenta.';
-  $('#registration-message').textContent = '';
-  $('#cancel-registration').textContent = 'Editar información';
-  $('#submit-registration').textContent = 'Confirmar correo';
-  startRegistrationResendCountdown();
-  $('#registration-code').focus();
 }
 
 function syncRegistrationRolePicker() {
@@ -741,16 +985,53 @@ function closeRegistrationRolePicker(returnFocus = false) {
   const menu = $('#registration-role-options');
   menu.classList.add('hidden');
   trigger.setAttribute('aria-expanded', 'false');
+  trigger.closest('.role-picker').classList.remove('is-open');
   if (returnFocus) trigger.focus();
 }
 
 function openRegistrationRolePicker() {
+  closeRegistrationFichaPicker();
   const trigger = $('#registration-role-trigger');
   const menu = $('#registration-role-options');
   menu.classList.remove('hidden');
   trigger.setAttribute('aria-expanded', 'true');
+  trigger.closest('.role-picker').classList.add('is-open');
   const selected = menu.querySelector('[aria-selected="true"]');
   selected?.focus();
+}
+
+function syncRegistrationFichaPicker() {
+  const select = $('#registration-ficha');
+  const selected = select.selectedOptions[0];
+  const trigger = $('#registration-ficha-trigger');
+  const value = selected?.value ? selected.textContent : 'Selecciona una ficha activa';
+  $('#registration-ficha-value').textContent = value;
+  trigger.setAttribute('aria-label', value);
+  $('#registration-ficha-options').querySelectorAll('[data-value]').forEach(option => {
+    const isSelected = option.dataset.value === select.value;
+    option.setAttribute('aria-selected', String(isSelected));
+    option.classList.toggle('selected', isSelected);
+  });
+}
+
+function closeRegistrationFichaPicker(returnFocus = false) {
+  const trigger = $('#registration-ficha-trigger');
+  $('#registration-ficha-options').classList.add('hidden');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.closest('.role-picker').classList.remove('is-open');
+  if (returnFocus) trigger.focus();
+}
+
+function openRegistrationFichaPicker() {
+  if ($('#registration-ficha').disabled) return;
+  closeRegistrationRolePicker();
+  const menu = $('#registration-ficha-options');
+  const trigger = $('#registration-ficha-trigger');
+  menu.classList.remove('hidden');
+  trigger.setAttribute('aria-expanded', 'true');
+  trigger.closest('.role-picker').classList.add('is-open');
+  const selected = menu.querySelector('[aria-selected="true"]');
+  (selected || menu.querySelector('[data-value]'))?.focus();
 }
 
 $('#registration-role-trigger').addEventListener('click', () => {
@@ -797,20 +1078,74 @@ $('#registration-role-options').addEventListener('keydown', event => {
   options[next].focus();
 });
 
+$('#registration-ficha-trigger').addEventListener('click', () => {
+  $('#registration-ficha-trigger').getAttribute('aria-expanded') === 'true'
+    ? closeRegistrationFichaPicker()
+    : openRegistrationFichaPicker();
+});
+
+$('#registration-ficha-options').addEventListener('click', event => {
+  const option = event.target.closest('[data-value]');
+  if (!option) return;
+  $('#registration-ficha').value = option.dataset.value;
+  $('#registration-ficha').dispatchEvent(new Event('change', {bubbles:true}));
+  syncRegistrationFichaPicker();
+  closeRegistrationFichaPicker(true);
+});
+
+$('#registration-ficha-trigger').addEventListener('keydown', event => {
+  if (['ArrowDown','ArrowUp','Enter',' '].includes(event.key)) {
+    event.preventDefault();
+    openRegistrationFichaPicker();
+  }
+});
+
+$('#registration-ficha-options').addEventListener('keydown', event => {
+  const options = [...$('#registration-ficha-options').querySelectorAll('[data-value]')];
+  const current = options.indexOf(document.activeElement);
+  let next = current;
+  if (event.key === 'ArrowDown') next = (current + 1) % options.length;
+  else if (event.key === 'ArrowUp') next = (current - 1 + options.length) % options.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = options.length - 1;
+  else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeRegistrationFichaPicker(true);
+    return;
+  } else if (event.key === 'Tab') {
+    closeRegistrationFichaPicker();
+    return;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  options[next].focus();
+});
+
 document.addEventListener('pointerdown', event => {
   if (!event.target.closest('.role-picker')) closeRegistrationRolePicker();
+  if (!event.target.closest('.ficha-picker')) closeRegistrationFichaPicker();
+  if (!event.target.closest('.progress-ficha-picker')) closeAttendanceFichaPicker();
 });
 
 function updateRegistrationRole() {
   const student = $('#registration-role').value === 'estudiante';
+  $('#registration-ficha-field').classList.toggle('hidden', !student);
+  $('#registration-ficha').required = student;
+  $('#registration-ficha').disabled = !student || $('#registration-ficha').options.length < 2;
+  $('#registration-ficha-trigger').disabled = $('#registration-ficha').disabled;
+  $('#submit-registration').disabled = student && $('#registration-ficha').options.length < 2;
   $('#registration-title').textContent = student ? 'Registrar como estudiante' : 'Solicitar cuenta de personal';
-  $('#registration-intro').textContent = student
-    ? 'Completa tus datos para activar tu cuenta de estudiante de inmediato. Al finalizar, se generará un carné QR PNG que podrás descargar y usar para iniciar sesión.'
-    : 'Completa tus datos y guarda el carné QR que se generará. Un administrador debe aprobar la solicitud antes de que puedas iniciar sesión.';
+  $('#registration-intro').textContent = student && $('#registration-ficha').options.length < 2
+    ? 'Todavía no hay fichas activas disponibles. Consulta al administrador para que cree o active una ficha.'
+    : student
+    ? 'Completa tus datos y selecciona una ficha activa para crear tu cuenta. Al finalizar, se generará un carné QR PNG para iniciar sesión.'
+    : 'Completa tus datos y guarda el carné QR. Un administrador debe aprobar la solicitud antes de que puedas iniciar sesión.';
   $('#submit-registration').textContent = student ? 'Crear cuenta y carné' : 'Enviar solicitud y generar carné';
 }
 
 $('#registration-role').addEventListener('change', updateRegistrationRole);
+$('#registration-ficha').addEventListener('change', syncRegistrationFichaPicker);
 
 function updateRegistrationPhotoName() {
   const file = $('#registration-photo').files?.[0];
@@ -932,31 +1267,85 @@ function createQrReader() {
 
 function closeRegistration() {
   $('#registration-dialog').close();
-  if (registrationVerificationPending) resetRegistrationVerification();
 }
 
 $('#close-registration').addEventListener('click', closeRegistration);
-$('#registration-dialog').addEventListener('close', () => {
-  if (registrationVerificationPending) resetRegistrationVerification();
-});
-$('#cancel-registration').addEventListener('click', () => {
-  if (registrationVerificationPending) {
-    resetRegistrationVerification();
-    updateRegistrationRole();
-    $('#registration-message').textContent = '';
-    return;
-  }
-  closeRegistration();
+$('#cancel-registration').addEventListener('click', closeRegistration);
+
+function reloadAttendanceView() {
+  const module = activeModule === 'student-progress' && ['administrador','instructor'].includes(currentUser?.rol)
+    ? 'student-progress'
+    : 'attendance';
+  return showModule(module);
+}
+
+function closeAttendanceFichaPicker(returnFocus = false) {
+  const trigger = $('#attendance-ficha-trigger');
+  $('#attendance-ficha-options').classList.add('hidden');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.closest('.progress-ficha-picker').classList.remove('is-open');
+  if (returnFocus) trigger.focus();
+}
+
+function openAttendanceFichaPicker() {
+  if ($('#attendance-ficha-trigger').disabled) return;
+  const menu = $('#attendance-ficha-options');
+  const trigger = $('#attendance-ficha-trigger');
+  menu.classList.remove('hidden');
+  trigger.setAttribute('aria-expanded', 'true');
+  trigger.closest('.progress-ficha-picker').classList.add('is-open');
+  (menu.querySelector('[aria-selected="true"]') || menu.querySelector('[data-value]'))?.focus();
+}
+
+$('#attendance-ficha-trigger').addEventListener('click', () => {
+  $('#attendance-ficha-trigger').getAttribute('aria-expanded') === 'true'
+    ? closeAttendanceFichaPicker()
+    : openAttendanceFichaPicker();
 });
 
-$('#attendance-ficha').addEventListener('change', () => showModule('attendance').catch(showError));
-$('#attendance-environment').addEventListener('change', () => {
-  $('#attendance-ficha').value = '';
-  showModule('attendance').catch(showError);
+$('#attendance-ficha-trigger').addEventListener('keydown', event => {
+  if (['ArrowDown','ArrowUp','Enter',' '].includes(event.key)) {
+    event.preventDefault();
+    openAttendanceFichaPicker();
+  }
 });
-$('#attendance-date').value = bogotaDate();
-$('#attendance-date').addEventListener('change', () => showModule('attendance').catch(showError));
-$('#attendance-refresh').addEventListener('click', () => showModule('attendance').catch(showError));
+
+$('#attendance-ficha-options').addEventListener('click', event => {
+  const option = event.target.closest('[data-value]');
+  if (!option) return;
+  $('#attendance-ficha').value = option.dataset.value;
+  updateAttendanceFichaOptions(attendanceFichas, option.dataset.value);
+  progressStudent = null;
+  closeAttendanceFichaPicker(true);
+  reloadAttendanceView().catch(showError);
+});
+
+$('#attendance-ficha-options').addEventListener('keydown', event => {
+  const options = [...$('#attendance-ficha-options').querySelectorAll('[data-value]')];
+  const current = options.indexOf(document.activeElement);
+  let next = current;
+  if (event.key === 'ArrowDown') next = (current + 1) % options.length;
+  else if (event.key === 'ArrowUp') next = (current - 1 + options.length) % options.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = options.length - 1;
+  else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeAttendanceFichaPicker(true);
+    return;
+  } else if (event.key === 'Tab') {
+    closeAttendanceFichaPicker();
+    return;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  options[next]?.focus();
+});
+$('#attendance-refresh').addEventListener('click', () => reloadAttendanceView().catch(showError));
+$('#availability-toggle').addEventListener('click', () => {
+  showWeeklyAvailability = !showWeeklyAvailability;
+  showModule('student-progress').catch(showError);
+});
 
 function closeAttendanceEdit() {
   $('#attendance-edit-dialog').close();
@@ -982,13 +1371,13 @@ $('#attendance-edit-form').addEventListener('submit', async event => {
       await api('attendance/mark', {method:'POST',body:JSON.stringify({
         usuario_id:Number(editingAttendance.id),
         ficha_id:Number($('#attendance-ficha').value),
-        fecha:$('#attendance-date').value || bogotaDate(),
+        fecha:bogotaDate(),
         estado:form.elements.estado.value,
         observacion:form.elements.observacion.value.trim()
       })});
     }
     closeAttendanceEdit();
-    await showModule('attendance');
+    await reloadAttendanceView();
   } catch (error) {
     $('#attendance-edit-message').textContent = error.message;
   } finally {
@@ -1029,47 +1418,184 @@ async function renderCard(card) {
   const qrElement = qrCanvas || qrContainer.querySelector('img');
   if (!qrElement) throw new Error('No se pudo generar el código QR del carné.');
   const qrImage = await loadImage(qrCanvas ? qrCanvas.toDataURL('image/png') : qrElement.src);
+  const logo = await loadImage('web/assets/images/portal-mark.svg');
   const canvas = document.createElement('canvas');
-  canvas.width = 1000;
-  canvas.height = 600;
+  canvas.width = 900;
+  canvas.height = 1400;
   const context = canvas.getContext('2d');
-  context.fillStyle = '#ffffff';
+  const roundedRect = (x, y, width, height, radius) => {
+    context.beginPath();
+    context.moveTo(x + radius, y);
+    context.lineTo(x + width - radius, y);
+    context.quadraticCurveTo(x + width, y, x + width, y + radius);
+    context.lineTo(x + width, y + height - radius);
+    context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    context.lineTo(x + radius, y + height);
+    context.quadraticCurveTo(x, y + height, x, y + height - radius);
+    context.lineTo(x, y + radius);
+    context.quadraticCurveTo(x, y, x + radius, y);
+    context.closePath();
+  };
+  const wrapText = (text, maxWidth, maxLines) => {
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      if (context.measureText(word).width > maxWidth) {
+        if (line) {
+          lines.push(line);
+          line = '';
+        }
+        let chunk = '';
+        for (const character of word) {
+          if (chunk && context.measureText(chunk + character).width > maxWidth) {
+            lines.push(chunk);
+            chunk = character;
+          } else {
+            chunk += character;
+          }
+        }
+        line = chunk;
+        continue;
+      }
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && context.measureText(candidate).width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    if (line) lines.push(line);
+    if (lines.length > maxLines) {
+      lines.length = maxLines;
+      let finalLine = lines[maxLines - 1];
+      while (finalLine && context.measureText(`${finalLine}…`).width > maxWidth) {
+        finalLine = finalLine.slice(0, -1);
+      }
+      lines[maxLines - 1] = `${finalLine.trimEnd()}…`;
+    }
+    return lines;
+  };
+  const drawField = (label, value, x, y, width) => {
+    roundedRect(x, y, width, 128, 20);
+    context.fillStyle = '#f5faf4';
+    context.fill();
+    context.strokeStyle = '#dce9dc';
+    context.lineWidth = 2;
+    context.stroke();
+    context.fillStyle = '#718376';
+    context.font = '700 17px Arial';
+    context.fillText(label.toUpperCase(), x + 20, y + 34);
+    context.fillStyle = '#183528';
+    context.font = 'bold 22px Arial';
+    wrapText(value || 'No registrado', width - 40, 2).forEach((line, index) => {
+      context.fillText(line, x + 20, y + 72 + index * 29);
+    });
+  };
+
+  context.fillStyle = '#f3f7f1';
   context.fillRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = '#087c45';
-  context.fillRect(0, 0, canvas.width, 120);
+  roundedRect(30, 30, 840, 1340, 34);
+  context.save();
+  context.clip();
   context.fillStyle = '#ffffff';
-  context.font = 'bold 35px Arial';
-  context.fillText('SENA · CARNÉ DIGITAL', 48, 70, 880);
-  context.font = '22px Arial';
-  context.fillText('Centro de la Industria, la Empresa y los Servicios', 48, 105, 880);
+  context.fillRect(30, 30, 840, 1340);
+  context.fillStyle = '#075b37';
+  context.fillRect(30, 30, 840, 250);
+  context.drawImage(logo, 72, 67, 86, 86);
+  context.fillStyle = '#ffffff';
+  context.font = 'bold 34px Arial';
+  context.fillText('GESTIÓN INSTITUCIONAL', 180, 110, 620);
+  context.font = '21px Arial';
+  context.fillStyle = '#d9f0df';
+  context.fillText('SERVICIO NACIONAL DE APRENDIZAJE · SENA', 180, 151, 630);
+  context.fillStyle = '#ffffff';
+  context.font = 'bold 27px Arial';
+  context.fillText('CARNÉ DIGITAL', 74, 225);
+  context.restore();
+
+  context.strokeStyle = '#dce9dc';
+  context.lineWidth = 3;
+  roundedRect(30, 30, 840, 1340, 34);
+  context.stroke();
+
+  const user = card.usuario || {};
+  const roleLabels = {estudiante:'APRENDIZ',instructor:'INSTRUCTOR',administrador:'ADMINISTRADOR',portero:'PORTERÍA'};
+  roundedRect(74, 316, 270, 48, 24);
+  context.fillStyle = '#e7f5e8';
+  context.fill();
+  context.fillStyle = '#087c45';
+  context.font = 'bold 20px Arial';
+  context.fillText(roleLabels[user.rol] || String(user.rol || 'USUARIO').toUpperCase(), 96, 348, 230);
 
   context.fillStyle = '#183528';
-  context.font = 'bold 37px Arial';
-  context.fillText(`${card.usuario.nombres} ${card.usuario.apellidos}`, 48, 205, 590);
-  context.font = '24px Arial';
-  context.fillStyle = '#087c45';
-  context.fillText(String(card.usuario.rol || '').toUpperCase(), 48, 252, 590);
-  context.fillStyle = '#425b4c';
-  context.font = '21px Arial';
-  context.fillText(`Documento: ${card.usuario.documento}`, 48, 316, 590);
-  context.fillText(`Correo: ${card.usuario.correo}`, 48, 362, 590);
-  context.fillText(`Teléfono: ${card.usuario.telefono || 'No registrado'}`, 48, 408, 590);
-  context.font = '16px Arial';
-  context.fillStyle = '#718376';
-  context.fillText('Presenta este QR para iniciar sesión. No lo compartas.', 48, 540, 590);
+  context.font = 'bold 38px Arial';
+  wrapText(`${user.nombres || ''} ${user.apellidos || ''}`, 490, 2)
+    .forEach((line, index) => context.fillText(line, 76, 420 + index * 45));
+  context.fillStyle = '#16894f';
+  context.fillRect(76, 475, 490, 4);
 
-  if (card.usuario.foto) {
-    const photo = await loadImage(card.usuario.foto);
-    const size = 128;
-    const cropSize = Math.min(photo.width, photo.height);
+  roundedRect(625, 315, 200, 235, 22);
+  context.fillStyle = '#edf5ec';
+  context.fill();
+  context.strokeStyle = '#dce9dc';
+  context.lineWidth = 2;
+  context.stroke();
+  if (user.foto) {
+    const photo = await loadImage(user.foto);
+    const scale = Math.max(180 / photo.width, 215 / photo.height);
+    const sourceWidth = 180 / scale;
+    const sourceHeight = 215 / scale;
     context.save();
-    context.beginPath();
-    context.arc(790, 257, size / 2, 0, Math.PI * 2);
+    roundedRect(635, 325, 180, 215, 16);
     context.clip();
-    context.drawImage(photo, (photo.width - cropSize) / 2, (photo.height - cropSize) / 2, cropSize, cropSize, 790 - size / 2, 193, size, size);
+    context.drawImage(photo, (photo.width - sourceWidth) / 2, (photo.height - sourceHeight) / 2,
+      sourceWidth, sourceHeight, 635, 325, 180, 215);
     context.restore();
+  } else {
+    context.fillStyle = '#16894f';
+    context.font = 'bold 74px Arial';
+    const initials = `${String(user.nombres || 'U')[0]}${String(user.apellidos || '')[0] || ''}`.toUpperCase();
+    context.textAlign = 'center';
+    context.fillText(initials, 725, 455);
+    context.textAlign = 'left';
   }
-  context.drawImage(qrImage, 690, 335, 240, 240);
+
+  context.fillStyle = '#718376';
+  context.font = 'bold 17px Arial';
+  context.fillText('CENTRO DE FORMACIÓN', 76, 530);
+  context.fillStyle = '#425b4c';
+  context.font = '22px Arial';
+  context.fillText('Centro de la Industria, la Empresa', 76, 565, 510);
+  context.fillText('y los Servicios', 76, 595, 510);
+
+  drawField('Documento', user.documento, 74, 630, 365);
+  drawField('Teléfono', user.telefono, 461, 630, 365);
+  drawField('Correo electrónico', user.correo, 74, 778, 752);
+  drawField('Tipo de cuenta', roleLabels[user.rol] || user.rol, 74, 926, 752);
+
+  roundedRect(74, 1080, 752, 220, 22);
+  context.fillStyle = '#ffffff';
+  context.fill();
+  context.strokeStyle = '#dce9dc';
+  context.lineWidth = 2;
+  context.stroke();
+  context.drawImage(qrImage, 92, 1090, 200, 200);
+  context.textAlign = 'left';
+  context.fillStyle = '#087c45';
+  context.font = 'bold 24px Arial';
+  context.fillText('ESCANEA PARA INICIAR SESIÓN', 330, 1168, 450);
+  context.fillStyle = '#718376';
+  context.font = '20px Arial';
+  context.fillText('Usa este código QR para ingresar a tu cuenta.', 330, 1208, 450);
+  context.fillText('No lo compartas con otras personas.', 330, 1242, 450);
+
+  context.fillStyle = '#718376';
+  context.font = '17px Arial';
+  context.textAlign = 'center';
+  context.fillText('Carné personal · Gestión Institucional SENA', 450, 1338);
+  context.textAlign = 'left';
   return canvas.toDataURL('image/png');
 }
 
@@ -1090,7 +1616,6 @@ async function showCard(card, pendingApproval = false) {
 }
 
 async function openMyCard() {
-  if (Number(currentUser?.qr_entregado) === 1) return;
   const card = await api('auth/card');
   await showCard(card);
 }
@@ -1107,7 +1632,6 @@ async function downloadCard() {
     link.click();
     if (currentUser && !generatedCardPendingApproval) {
       currentUser.qr_entregado = 1;
-      $('#download-my-card').classList.add('hidden');
     }
     $('#download-card').classList.add('hidden');
     $('#card-dialog-message').textContent = 'Carné descargado. Guárdalo en un lugar seguro; no volveremos a mostrar el botón de descarga en esta cuenta.';
@@ -1138,24 +1662,11 @@ $('#registration-form').addEventListener('submit', async event => {
   const submit = $('#submit-registration');
   submit.disabled = true;
   try {
-    if (registrationVerificationPending) {
-      const codigo = $('#registration-code').value.trim();
-      if (!/^\d{6}$/.test(codigo)) {
-        throw new Error('Escribe el código de seis dígitos que recibiste por correo.');
-      }
-      const result = await api('auth/register/verify', {
-        method:'POST',
-        body:JSON.stringify({correo:values.get('correo'), codigo})
-      });
-      await finishRegistration(result, form);
-      return;
-    }
-
     if (values.get('password') !== values.get('confirm_password')) {
       throw new Error('Las contraseñas no coinciden.');
     }
     const result = await api('auth/register', {method:'POST',body:JSON.stringify(await registrationRequestBody(values))});
-    showRegistrationVerification(result.correo || values.get('correo'));
+    await finishRegistration(result, form);
   } catch (error) {
     $('#registration-message').textContent = error.message;
   } finally {
@@ -1176,23 +1687,14 @@ async function registrationRequestBody(values = new FormData($('#registration-fo
       correo:values.get('correo'),
       password:values.get('password'),
       telefono:values.get('telefono'),
+      ...(values.get('rol') === 'estudiante' ? {ficha_id:Number(values.get('ficha_id'))} : {}),
       foto:photoFile ? await readFileAsDataUrl(photoFile) : null
   };
 }
 
 async function finishRegistration(result, form) {
   $('#registration-dialog').close();
-  if (registrationResendTimer) clearInterval(registrationResendTimer);
-  registrationResendTimer = null;
-  registrationVerificationPending = false;
   form.reset();
-  $('#registration-code').value = '';
-  $('#registration-code').required = false;
-  $('#registration-fields').classList.remove('hidden');
-  $('#registration-verification').classList.add('hidden');
-  $('#cancel-registration').textContent = 'Cancelar';
-  $('#submit-registration').textContent = 'Crear cuenta';
-  $('#submit-registration').classList.remove('hidden');
   updateRegistrationPhotoName();
   if (result.pending_approval) {
     $('#landing-screen').classList.remove('hidden');
@@ -1203,24 +1705,6 @@ async function finishRegistration(result, form) {
   }
   await showCard(result.card, Boolean(result.pending_approval));
 }
-
-$('#resend-registration-code').addEventListener('click', async () => {
-  const resend = $('#resend-registration-code');
-  resend.disabled = true;
-  $('#registration-message').textContent = '';
-  try {
-    const result = await api('auth/register', {
-      method:'POST',
-      body:JSON.stringify(await registrationRequestBody())
-    });
-    showRegistrationVerification(result.correo || new FormData($('#registration-form')).get('correo'));
-    $('#registration-message').textContent = 'Enviamos un nuevo código a tu correo.';
-  } catch (error) {
-    $('#registration-message').textContent = error.message;
-    if (error.status === 429) startRegistrationResendCountdown();
-    else resend.disabled = false;
-  }
-});
 
 async function logout() {
   const buttons = [$('#logout-button'), $('#logout-top-button')].filter(Boolean);
@@ -1273,7 +1757,7 @@ $('#recovery-form').addEventListener('submit', async event => {
   }
 });
 
-$('#add-record').addEventListener('click', openForm);
+$('#add-record').addEventListener('click', () => openForm().catch(showError));
 $('#export-report').addEventListener('click', async () => {
   try {
     const format = $('#report-format').value;
