@@ -4,6 +4,8 @@ Aplicación institucional (proyecto de prueba y práctica) para XAMPP con una AP
 la aplicación Android. Los datos persisten en MySQL/MariaDB; el panel web
 actualiza sus indicadores cada 8 segundos.
 
+Para instrucciones de uso paso a paso, consulta el [Manual de uso](MANUAL_DE_USO.md).
+
 ## Requisitos
 
 - XAMPP con Apache, MySQL/MariaDB y PHP 8 (extensiones `pdo_mysql`, `json`,
