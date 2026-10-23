@@ -22,8 +22,9 @@ según el tipo de cuenta: administración, instructor, estudiante o portería.
    - **Estudiante**: selecciona una ficha activa.
    - **Instructor** o **Portería**: la cuenta queda pendiente hasta que
      administración la apruebe.
-3. Completa documento, teléfono, nombres, apellidos, correo y contraseña.
-   Confirma la contraseña.
+3. Completa tipo y número de documento, teléfono, nombres, apellidos, correo,
+   contraseña y PIN del carné (de 4 a 6 números). Confirma la contraseña y el
+   PIN, y acepta el tratamiento de datos personales.
 4. Si quieres, añade una foto JPG, PNG o WEBP de máximo 1 MB para el carné.
 5. Pulsa **Crear cuenta** y sigue el aviso que aparece. Las solicitudes de
    instructor y portería no tendrán acceso institucional hasta ser aprobadas.
@@ -35,18 +36,20 @@ puede crear esas cuentas desde el módulo **Usuarios**.
 
 1. En la portada, selecciona **Ingresar como estudiante**, **Ingresar como
    equipo institucional** o **Ingresar como administrador**.
-2. Inicia sesión escaneando el QR del carné con la cámara, o elige una imagen
-   que contenga el QR.
+2. Inicia sesión con documento o correo y contraseña, o escanea el QR del carné
+   con la cámara / elige una imagen que contenga el QR y luego ingresa el PIN.
 3. Si el navegador lo solicita, permite el uso de la cámara. La cámara requiere
    `localhost` o HTTPS. También puedes elegir una imagen del QR en vez de usar
    la cámara.
-4. Si una cuenta existente todavía no tiene carné, usa **Acceso temporal para
-   obtener tu carné** con el correo y la contraseña de esa cuenta. Descarga el
-   carné cuando aparezca.
-5. Una vez emitido, guarda el carné en un lugar seguro. El QR funciona como una
-   credencial de acceso: no lo compartas ni publiques. En la sesión, **Mi carné
-   QR** permite abrir la información del carné.
-6. Para salir, pulsa **Cerrar sesión**.
+4. En el acceso con QR, confirma que la foto y el nombre correspondan a tu
+   cuenta antes de ingresar el PIN. Tres PIN incorrectos bloquean temporalmente
+   el ingreso con carné durante cinco minutos.
+5. Las cuentas existentes pueden establecer o cambiar su PIN al iniciar sesión
+   con documento o correo y contraseña, escribiéndolo en el campo opcional.
+6. Guarda el carné en un lugar seguro. El QR por sí solo no permite iniciar
+   sesión, pero contiene datos del carné: no lo compartas ni publiques. En la
+   sesión, **Mi carné QR** permite volver a abrirlo.
+7. Para salir, pulsa **Cerrar sesión**.
 
 ## 4. Flujo de administración
 
@@ -55,6 +58,20 @@ la institución. Los formularios se abren con **＋ Nuevo registro**; cuando el
 módulo lo permite, también aparecen acciones para editar, eliminar, aprobar o
 rechazar registros.
 
+En **Configuración institucional** puede ajustar los umbrales de alerta de
+asistencia, los plazos para excusas y correcciones, y los intentos y la duración
+del bloqueo del PIN. Los umbrales se reflejan en las alertas del panel; los
+intentos y minutos se aplican al ingreso con carné. El plazo de corrección se
+cuenta desde el registro original: los instructores pueden editar o eliminar
+asistencias dentro de ese límite y administración puede corregirlas después.
+Para presentar una excusa, registra una **Novedad** de tipo `inasistencia` y
+selecciona la asistencia marcada como ausente del aprendiz. El plazo se cuenta
+de lunes a viernes y excluye las fechas activas de tipo festivo o vacaciones
+registradas en **Calendario académico**. No se aceptan excusas para asistencias
+futuras o que ya excedieron el límite. **Auditoría** permite
+consultar las 500 acciones más recientes y conserva el historial sin acciones
+para editarlo o eliminarlo.
+
 ### 4.1. Aprobar solicitudes de personal
 
 1. Abre **Solicitudes de registro**.
@@ -62,10 +79,39 @@ rechazar registros.
 3. Pulsa **Aprobar** para activar la solicitud o **Rechazar** si no corresponde.
 4. Las solicitudes pendientes también se cuentan en el indicador del menú.
 
-### 4.2. Crear fichas y asignarlas
+### 4.2. Configurar la base académica
+
+1. En **Programas académicos**, crea cada programa con código, nombre, nivel,
+   duración en trimestres y estado activo.
+2. En **Competencias**, crea las competencias y selecciona el programa al que
+   pertenecen.
+3. En **Resultados de aprendizaje**, registra el código y la descripción y
+   vincúlalos a una competencia.
+4. En **Calendario académico**, registra una fila por fecha y selecciona
+   **Festivo** o **Vacaciones**. Para excluir varios días de vacaciones,
+   registra cada fecha por separado. Solo se excluyen del cálculo las fechas
+   cuyo estado esté **Activo**.
+5. Para retirar un elemento sin perder su historial o sus relaciones, edítalo y
+   cambia su estado a **Inactivo**. Los catálogos académicos no se eliminan.
+
+**Prueba rápida de esta fase:**
+
+1. Crea un programa, su competencia y un resultado de aprendizaje.
+2. Crea una ficha y selecciona ese programa. En **Horarios**, verifica que la
+   competencia disponible sea la del programa asociado a la ficha.
+3. Configura temporalmente el plazo de excusa en un día hábil. Registra una
+   ausencia de un viernes, marca el lunes siguiente como festivo y presenta la
+   novedad de inasistencia el martes enlazándola a esa ausencia. Debe aceptarse
+   porque el lunes no cuenta. Para crear una asistencia de prueba con fecha
+   pasada, administración puede usar `POST /api/attendance/mark` con una sesión
+   autenticada y los campos `usuario_id`, `ficha_id`, `fecha` (viernes) y
+   `estado: "ausente"`. Compara con otra ausencia sin festivo entre las fechas:
+   al superar un día hábil, la excusa debe rechazarse.
+
+### 4.3. Crear fichas y asignarlas
 
 1. En **Fichas y programas**, crea la ficha con su número de siete dígitos,
-   programa, fecha de inicio y fecha de fin.
+   un programa académico activo, fecha de inicio y fecha de fin.
 2. El estado se calcula con esas fechas: programada antes de empezar, activa
    durante el rango y terminada después de la fecha final.
 3. En **Instructores por ficha**, asigna cada instructor a las fichas que debe
@@ -75,10 +121,10 @@ rechazar registros.
 5. Los aprendices podrán escoger una ficha activa al registrarse. Las fichas
    asignadas son la base para limitar la información que ve cada instructor.
 
-### 4.3. Configurar horarios y ambientes
+### 4.4. Configurar horarios y ambientes
 
-1. Abre **Horarios** y registra la ficha, el ambiente, el instructor, el día,
-   la hora de inicio y fin, y la asignatura.
+1. Abre **Horarios** y registra la ficha, una competencia del mismo programa,
+   el ambiente, el instructor, el día, la hora de inicio y fin, y la asignatura.
 2. En **Ambientes**, administra el código, nombre, ubicación, capacidad y
    estado del espacio.
 3. Un instructor puede consultar ambientes, pero su gestión corresponde a
@@ -86,7 +132,7 @@ rechazar registros.
 4. La vista semanal de disponibilidad usa los horarios registrados para
    mostrar los ambientes libres, ocupados o en mantenimiento.
 
-### 4.4. Consultar progreso y asistencia
+### 4.5. Consultar progreso y asistencia
 
 1. Abre **Progreso de estudiantes** y selecciona una ficha.
 2. Consulta el resumen visual de asistencia, con porcentaje general, gráfico
@@ -103,10 +149,15 @@ entran en el cálculo. La plataforma registra asistencia, pero no tiene un
 módulo de entregas de tareas; por eso el porcentaje no representa tareas ni
 notas académicas.
 
-### 4.5. Otros módulos de administración
+### 4.6. Otros módulos de administración
 
 - **Usuarios**: consulta y administra las cuentas y sus roles.
 - **Notificaciones**: gestiona avisos institucionales.
+- **Excusas**: revisa el motivo y el soporte enviado por los aprendices. Solo
+  los instructores asignados pueden revisar las de sus fichas; al aprobar una
+  excusa, la asistencia se convierte en permiso y el aprendiz recibe un aviso.
+- **Juicios evaluativos**: registra aprobado, no aprobado o por evaluar para
+  los resultados de aprendizaje de los aprendices autorizados.
 - **Novedades**: registra novedades relacionadas con aprendices.
 - **Carnets digitales**: consulta o administra los carnés.
 - **Reservas**: administra reservas de ambientes.
@@ -129,23 +180,48 @@ notas académicas.
    **Permiso**.
 6. Para añadir o corregir un motivo, usa **Agregar motivo** o **Editar /
    motivo**. Para retirar un registro, usa **Eliminar** y confirma la acción.
+   Los instructores solo pueden corregir o eliminar dentro de las horas
+   configuradas desde el registro original; administración puede hacerlo
+   después del vencimiento.
 7. Para revisar la ocupación de espacios, pulsa **Disponibilidad semanal de
    ambientes**. Usa **Volver a aprendices** para regresar a la lista.
 
 El instructor no ve los accesos separados a **Asistencia** ni **Novedades**:
 registra la asistencia desde **Progreso de estudiantes**. Los datos y las
 acciones se limitan también desde el servidor a las fichas que tiene asignadas.
+Administración y los instructores asignados pueden registrar excusas en
+**Novedades**, con el tipo `inasistencia`, eligiendo una asistencia ausente del
+aprendiz. Debe presentarse dentro de los días hábiles configurados. Se excluyen
+sábados, domingos y las fechas activas de tipo festivo o vacaciones registradas
+en **Calendario académico**. Los soportes se revisan desde **Excusas**.
 
 ## 6. Flujo del estudiante
 
-- **Horarios**: consulta las clases organizadas por día y hora, con asignatura,
-  ambiente, instructor y ficha.
-- **Asistencia**: consulta su resumen personal y el historial de estados,
-  fechas, horarios y observaciones. El estudiante no puede modificar registros
-  de asistencia.
-- **Notificaciones**: lee sus avisos personales y el motivo u observación que
-  haya registrado el instructor.
-- **Mi carné QR**: abre la información del carné disponible para la cuenta.
+1. **Inicio** muestra el nombre, ficha, programa, trimestre, porcentaje de
+   asistencia, alertas institucionales, notificaciones sin leer y clases del
+   día.
+2. **Horarios** permite alternar entre día y semana y consultar hora,
+   competencia, ambiente, instructor, ficha, programa y trimestre.
+3. **Asistencia** muestra el estado, competencia, horario, ambiente, instructor
+   y observación de cada sesión. El porcentaje es
+   `(asistió + llegó tarde) / (total de sesiones - permisos) × 100`.
+4. Para justificar una falta, pulsa **Presentar excusa**, escribe el motivo y
+   adjunta PDF o imagen JPG, PNG o WEBP de hasta 5 MB. El sistema verifica el
+   plazo hábil configurado, excluyendo sábados, domingos, festivos y vacaciones
+   activas. Consulta el resultado en **Mis excusas**.
+5. **Notificaciones** muestra fecha, tipo, remitente y mensaje; puedes marcar
+   cada aviso o todos como leídos.
+6. **Mi formación** muestra competencias, resultados de aprendizaje y el último
+   juicio evaluativo. Usa **Descargar historial PDF** para guardar el
+   historial.
+7. **Mi carné QR** abre el carné digital. **Mi perfil** permite editar
+   únicamente correo, celular, contraseña y PIN; los dos últimos requieren la
+   contraseña actual.
+
+El servidor determina la identidad del aprendiz desde su sesión y filtra todos
+los datos personales por esa identidad. No se aceptan IDs enviados por la
+pantalla para consultar información de otro aprendiz ni para usar funciones de
+instructor.
 
 ## 7. Flujo de portería
 
@@ -187,6 +263,9 @@ base de datos conectada a esa instalación.
 
 - **No abre o aparece error del servidor**: comprueba que Apache y MySQL estén
   iniciados y visita `http://localhost/gestion/api/health`.
+- **No puedes ingresar con QR**: confirma que el PIN tenga entre 4 y 6 números.
+  Tras tres intentos fallidos, espera cinco minutos. Si tu cuenta es anterior a
+  la activación del PIN, entra con contraseña y configúralo.
 - **El QR no se lee**: verifica que la imagen esté nítida y muestre el código
   completo; también puedes probar la cámara o una imagen distinta.
 - **La cámara no aparece**: concede permiso al navegador y usa `localhost` o
@@ -204,7 +283,7 @@ base de datos conectada a esa instalación.
 
 ## 11. Privacidad y cuidado de los datos
 
-- No compartas el carné QR: quien lo tenga puede intentar acceder a la cuenta.
+- No compartas el carné QR: aunque requiere el PIN, muestra datos personales.
 - Cierra sesión si utilizas un computador compartido.
 - No uses credenciales de demostración ni datos ficticios al trabajar con
   información real.

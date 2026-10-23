@@ -2,16 +2,26 @@ const API = 'api';
 const modules = {
   'registration-requests': {label:'Solicitudes de registro', icon:'✉', roles:['administrador'], fields:[]},
   'student-progress': {label:'Progreso de estudiantes', icon:'◉', roles:['administrador','instructor'], fields:[]},
+  evaluations: {label:'Juicios evaluativos', icon:'✓', roles:['administrador','instructor'], fields:[['estudiante_id','Aprendiz','select'],['resultado_id','Resultado de aprendizaje','select'],['juicio','Juicio','select']]},
+  excuses: {label:'Excusas', icon:'⚑', roles:['administrador','instructor','estudiante'], fields:[]},
+  formation: {label:'Mi formación', icon:'▤', roles:['estudiante'], fields:[]},
+  profile: {label:'Mi perfil', icon:'♙', roles:['estudiante'], fields:[], readOnly:true},
+  settings: {label:'Configuración institucional', icon:'⚙', roles:['administrador'], fields:[], readOnly:true},
+  'audit-log': {label:'Auditoría', icon:'▤', roles:['administrador'], fields:[], readOnly:true},
   users: {label:'Usuarios', icon:'♙', roles:['administrador'], fields:[['rol_id','Rol','select'],['documento','Documento'],['nombres','Nombres'],['apellidos','Apellidos'],['correo','Correo','email'],['password','Contraseña (mínimo 8 caracteres)','password'],['telefono','Teléfono']]},
   environments: {label:'Ambientes', icon:'⌂', roles:['administrador','instructor'], fields:[['codigo','Código'],['nombre','Nombre'],['ubicacion','Ubicación'],['capacidad','Capacidad','number'],['estado','Estado (disponible/ocupado/mantenimiento)'],['descripcion','Descripción']]},
-  fichas: {label:'Fichas y programas', icon:'▤', roles:['administrador'], fields:[['codigo','Número de ficha (7 dígitos)'],['programa','Programa'],['fecha_inicio','Fecha de inicio','date'],['fecha_fin','Fecha de fin','date']]},
+  programs: {label:'Programas académicos', icon:'▤', roles:['administrador'], fields:[['codigo','Código'],['nombre','Nombre'],['nivel','Nivel','select'],['duracion_trimestres','Duración en trimestres','number'],['estado','Estado','select']]},
+  competencies: {label:'Competencias', icon:'◈', roles:['administrador'], fields:[['codigo','Código'],['nombre','Nombre'],['programa_id','Programa','select'],['estado','Estado','select']]},
+  'learning-outcomes': {label:'Resultados de aprendizaje', icon:'✓', roles:['administrador'], fields:[['codigo','Código'],['descripcion','Descripción'],['competencia_id','Competencia','select'],['estado','Estado','select']]},
+  'academic-calendar': {label:'Calendario académico', icon:'▦', roles:['administrador'], fields:[['fecha','Fecha','date'],['tipo','Tipo','select'],['descripcion','Descripción'],['estado','Estado','select']]},
+  fichas: {label:'Fichas y programas', icon:'▤', roles:['administrador'], fields:[['codigo','Número de ficha (7 dígitos)'],['programa_id','Programa','select'],['fecha_inicio','Fecha de inicio','date'],['fecha_fin','Fecha de fin','date']]},
   'ficha-assignments': {label:'Instructores por ficha', icon:'♧', roles:['administrador'], fields:[['ficha_id','Ficha','number'],['instructor_id','Instructor','number']]},
-  schedules: {label:'Horarios', icon:'◷', roles:['administrador','instructor','estudiante'], fields:[['ficha_id','Ficha / programa','number'],['ambiente_id','Ambiente','number'],['instructor_id','Instructor','number'],['dia_semana','Día','select'],['hora_inicio','Hora inicio','time'],['hora_fin','Hora fin','time'],['asignatura','Asignatura']]},
+  schedules: {label:'Horarios', icon:'◷', roles:['administrador','instructor','estudiante'], fields:[['ficha_id','Ficha / programa','select'],['competencia_id','Competencia','select'],['ambiente_id','Ambiente','select'],['instructor_id','Instructor','select'],['dia_semana','Día','select'],['hora_inicio','Hora inicio','time'],['hora_fin','Hora fin','time'],['asignatura','Asignatura']]},
   enrollments: {label:'Asignación de aprendices', icon:'♧', roles:['administrador'], fields:[['ficha_id','Ficha / programa','number'],['usuario_id','Aprendiz','number']]},
   cards: {label:'Carnets digitales', icon:'▣', roles:['administrador','estudiante'], fields:[['usuario_id','ID usuario','number'],['vence_en','Fecha de vencimiento','date']]},
   reservations: {label:'Reservas', icon:'▦', roles:['administrador'], fields:[['ambiente_id','ID ambiente','number'],['usuario_id','ID responsable','number'],['inicio','Inicio','datetime-local'],['fin','Fin','datetime-local'],['motivo','Motivo']]},
   attendance: {label:'Asistencia', icon:'✓', roles:['administrador','instructor','estudiante'], fields:[['usuario_id','ID estudiante','number'],['ficha_id','ID ficha','number'],['fecha','Fecha','date'],['estado','Estado (presente/ausente/tarde/permiso)'],['observacion','Observación']]},
-  novelties: {label:'Novedades', icon:'⚑', roles:['administrador','instructor'], fields:[['usuario_id','ID estudiante','number'],['tipo','Tipo (retraso/permiso/inasistencia/otra)'],['descripcion','Descripción'],['fecha','Fecha','date']]},
+  novelties: {label:'Novedades', icon:'⚑', roles:['administrador','instructor'], fields:[['usuario_id','ID estudiante','number'],['tipo','Tipo (retraso/permiso/inasistencia/otra)'],['descripcion','Descripción'],['fecha','Fecha','date'],['asistencia_id','Asistencia ausente vinculada (necesaria para inasistencia)','select']]},
   accesses: {label:'Accesos', icon:'⇄', roles:['administrador','portero'], fields:[['qr','Código QR del carnet'],['usuario_id','ID usuario (opcional)','number'],['visitante_id','ID visitante (opcional)','number'],['serial','Serial de equipo (opcional)'],['tipo','Tipo (ingreso/salida)'],['observacion','Observación']]},
   visitors: {label:'Visitantes', icon:'♧', roles:['administrador','portero'], fields:[['documento','Documento'],['nombres','Nombre completo'],['entidad','Entidad'],['motivo','Motivo'],['anfitrion_id','ID anfitrión','number']]},
   equipment: {label:'Inventario', icon:'▣', roles:['administrador','portero'], fields:[['serial','Serial'],['nombre','Nombre del equipo'],['categoria','Categoría'],['estado','Estado (disponible/asignado/prestado/mantenimiento/baja)'],['ubicacion','Ubicación'],['autorizado','Autorizado (1/0)','number']]},
@@ -24,10 +34,13 @@ const modules = {
 const icons = ['◉','⌂','✓','⇄','▣','▦'];
 let currentUser = null, activeModule = null, chart = null, editId = null, userRoleFilter = 'todos';
 let tableRefreshInProgress = false;
+let settingsChanged = false;
 let loginScannerControls = null, loginScannerStarting = false, loginScanCompleted = false, loginExpectedRole = null;
+let pendingLoginQrCode = null;
 let generatedCardUrl = null, generatedCardCode = null, generatedCardPendingApproval = false;
 let attendanceRoster = [], attendanceFichas = [], editingAttendance = null, progressStudent = null;
 let showWeeklyAvailability = false;
+let learnerScheduleView = 'week';
 const $ = (selector) => document.querySelector(selector);
 
 function bogotaDate() {
@@ -41,6 +54,8 @@ function bogotaDate() {
 
 function refreshActiveTable() {
   if (tableRefreshInProgress || !activeModule || $('#record-dialog').open ||
+      activeModule === 'profile' || $('#learner-excuse-dialog').open ||
+      activeModule === 'settings' && settingsChanged ||
       $('#attendance-ficha-trigger').getAttribute('aria-expanded') === 'true' || document.hidden) return;
   tableRefreshInProgress = true;
   loadTable().catch(showError).finally(() => { tableRefreshInProgress = false; });
@@ -53,11 +68,12 @@ async function api(path, options = {}) {
 
   let response;
   try {
-    response = await fetch(`${API}/${path}`, {
-      credentials: 'include',
-      headers: {'Content-Type':'application/json', ...(options.headers || {})},
-      ...options
-    });
+    const headers = {...(options.headers || {})};
+    if (!(options.body instanceof FormData) && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+    response = await fetch(`${API}/${path}`, {credentials:'include', ...options, headers});
+    $('#settings-form').addEventListener('input', () => { settingsChanged = true; });
   } catch {
     throw new Error('No se pudo conectar con la API. Inicia Apache y MySQL en XAMPP y abre http://localhost/gestion/.');
   }
@@ -84,6 +100,33 @@ async function api(path, options = {}) {
   return result.data;
 }
 
+async function downloadAuthorizedFile(path, filename) {
+  let response;
+  try {
+    response = await fetch(`${API}/${path}`, {credentials:'include'});
+  } catch {
+    throw new Error('No se pudo conectar con la API para descargar el archivo.');
+  }
+  if (!response.ok) {
+    let message = `No se pudo descargar el archivo (HTTP ${response.status}).`;
+    try {
+      const result = await response.json();
+      if (result.error) message = result.error;
+    } catch {}
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  const extension = ({'application/pdf':'pdf','image/jpeg':'jpg','image/png':'png','image/webp':'webp'})[blob.type] || 'bin';
+  link.download = `${filename}.${extension}`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
@@ -108,7 +151,7 @@ async function startApp() {
   renderNavigation();
   try {
     if (currentUser.rol === 'administrador') await showDashboard();
-    else if (currentUser.rol === 'estudiante') await showModule('schedules');
+    else if (currentUser.rol === 'estudiante') await showDashboard();
     else if (currentUser.rol === 'instructor') await showModule('student-progress');
     else await showModule('accesses');
   } catch (error) { showError(error); }
@@ -116,12 +159,17 @@ async function startApp() {
 
 function renderNavigation() {
   const entries = [];
-  if (currentUser.rol === 'administrador') entries.push(['dashboard','Resumen','◈']);
+  if (['administrador','estudiante'].includes(currentUser.rol)) {
+    entries.push(['dashboard',currentUser.rol === 'estudiante' ? 'Inicio' : 'Resumen','◈']);
+  }
   Object.entries(modules).forEach(([key, item]) => {
     if (currentUser.rol === 'instructor' && ['attendance','novelties'].includes(key)) return;
-    if (item.roles.includes(currentUser.rol) && !(currentUser.rol === 'estudiante' && key === 'cards')) entries.push([key,item.label,item.icon]);
+    if (item.roles.includes(currentUser.rol) && !(currentUser.rol === 'estudiante' && key === 'cards')) {
+      const label = key === 'excuses' && currentUser.rol === 'estudiante' ? 'Mis excusas' : item.label;
+      entries.push([key,label,item.icon]);
+    }
   });
-  $('#navigation').innerHTML = entries.map(([key,label,icon]) => `<a href="#${key}" class="nav-link" data-view="${key}"><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span>${key === 'registration-requests' ? '<span class="nav-badge hidden" id="registration-request-count"></span>' : ''}</a>`).join('');
+  $('#navigation').innerHTML = entries.map(([key,label,icon]) => `<a href="#${key}" class="nav-link" data-view="${key}"><span class="nav-icon">${icon}</span><span class="nav-label">${escapeHtml(label)}</span>${key === 'registration-requests' ? '<span class="nav-badge hidden" id="registration-request-count"></span>' : ''}${key === 'notifications' && currentUser.rol === 'estudiante' ? '<span class="nav-badge hidden" id="learner-notification-count"></span>' : ''}</a>`).join('');
   $('#navigation').querySelectorAll('[data-view]').forEach(link => link.addEventListener('click', event => {
     event.preventDefault();
     const key = link.dataset.view;
@@ -153,8 +201,8 @@ async function showDashboard() {
   activeModule = null;
   $('.view#dashboard-view').classList.remove('hidden');
   $('#resource-view').classList.add('hidden');
-  $('#page-title').textContent = currentUser.rol === 'administrador' ? 'Panel administrativo' : 'Resumen general';
-  $('#page-kicker').textContent = currentUser.rol === 'administrador' ? 'ADMINISTRADOR · GESTIÓN INSTITUCIONAL' : 'PANEL INSTITUCIONAL';
+  $('#page-title').textContent = currentUser.rol === 'estudiante' ? 'Inicio' : currentUser.rol === 'administrador' ? 'Panel administrativo' : 'Resumen general';
+  $('#page-kicker').textContent = currentUser.rol === 'estudiante' ? 'PANEL DEL APRENDIZ' : currentUser.rol === 'administrador' ? 'ADMINISTRADOR · GESTIÓN INSTITUCIONAL' : 'PANEL INSTITUCIONAL';
   setActiveNav('dashboard');
   await refreshDashboard();
   if (!window.dashboardTimer) window.dashboardTimer = setInterval(() => {
@@ -165,6 +213,14 @@ async function showDashboard() {
 }
 
 async function refreshDashboard() {
+  if (currentUser.rol === 'estudiante') {
+    await refreshLearnerDashboard();
+    return;
+  }
+  $('#learner-dashboard-panel').classList.add('hidden');
+  $('#stats-grid').classList.remove('hidden');
+  $('.chart-panel').classList.remove('hidden');
+  $('.refresh-note').classList.remove('hidden');
   const stats = await api('dashboard');
   $('#dashboard-message').textContent = '';
   $('#stats-grid').innerHTML = statConfig.map(([key,label,caption,icon]) => `<article class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${Number(stats[key] || 0).toLocaleString('es')}</div><div class="stat-caption">${caption}</div><div class="stat-icon">${icon}</div></article>`).join('');
@@ -173,9 +229,15 @@ async function refreshDashboard() {
   if (canViewAlerts) {
     const alerts = await api('attendance/alerts');
     $('#attendance-alerts').innerHTML = alerts.length
-      ? alerts.map(alert => `<div class="alert-row"><strong>${escapeHtml(alert.estudiante)}</strong><span>Documento ${escapeHtml(alert.documento)} · Ausencias: ${alert.fechas.map(escapeHtml).join(', ')}</span></div>`).join('')
+      ? alerts.map(alert => {
+        const summary = alert.tipo === 'asistencia_baja'
+          ? `Asistencia: ${Number(alert.porcentaje)}%`
+          : `3 faltas consecutivas: ${(alert.fechas || []).map(escapeHtml).join(', ')}`;
+        return `<div class="alert-row alert-${escapeHtml(alert.nivel)}"><strong>${escapeHtml(alert.estudiante)}</strong><span>${summary} · Documento ${escapeHtml(alert.documento)}</span></div>`;
+      }).join('')
       : '<p class="empty-row">No hay alertas de inasistencia consecutiva.</p>';
   }
+
   if (window.Chart) {
     const ctx = $('#activity-chart');
     const values = [stats.asistencias_hoy || 0, stats.accesos_hoy || 0, stats.reservas_activas || 0];
@@ -185,6 +247,48 @@ async function refreshDashboard() {
     } else {
       chart = new Chart(ctx, {type:'bar',data:{labels:['Asistencia','Accesos','Reservas'],datasets:[{data:values,backgroundColor:['#087c45','#16894f','#75ad70'],borderRadius:7,maxBarThickness:48}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0},grid:{color:'#e7eee4'}},x:{grid:{display:false}}}}});
     }
+  }
+}
+
+async function refreshLearnerDashboard() {
+  const dashboard = await api('learner/dashboard');
+  if (currentUser.rol !== 'estudiante' || activeModule !== null) return;
+  const learner = dashboard.aprendiz || {};
+  const attendance = dashboard.asistencia || {};
+  const percentage = Number(attendance.porcentaje || 0);
+  $('#dashboard-message').textContent = '';
+  $('#learner-dashboard-panel').classList.remove('hidden');
+  $('#stats-grid').classList.add('hidden');
+  $('.alerts-panel').classList.add('hidden');
+  $('.chart-panel').classList.add('hidden');
+  $('.refresh-note').classList.add('hidden');
+  $('#learner-welcome').textContent = `Hola, ${learner.nombres || currentUser.nombres}`;
+  $('#learner-program-summary').textContent = [
+    learner.ficha_codigo ? `Ficha ${learner.ficha_codigo}` : 'Sin ficha activa',
+    learner.programa || 'Programa por asignar',
+    learner.trimestre ? `Trimestre ${Number(learner.trimestre)}` : ''
+  ].filter(Boolean).join(' · ');
+  $('#learner-home-stats').innerHTML = [
+    ['Asistencia',`${percentage}%`,'Asistencia acumulada'],
+    ['Notificaciones sin leer',Number(dashboard.notificaciones_sin_leer || 0),'Avisos pendientes'],
+    ['Clases de hoy',(dashboard.clases_hoy || []).length,'Sesiones programadas']
+  ].map(([label,value,caption]) => `<article class="attendance-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(caption)}</small></article>`).join('');
+  const alert = attendance.alerta;
+  const alertBox = $('#learner-attendance-alert');
+  alertBox.classList.toggle('hidden', !alert);
+  alertBox.classList.toggle('alert-red', alert?.nivel === 'roja');
+  alertBox.classList.toggle('alert-yellow', alert?.nivel === 'amarilla');
+  if (alert) {
+    alertBox.textContent = `Alerta ${alert.nivel}: tu asistencia es ${percentage}%. Umbral institucional: ${Number(alert[alert.nivel === 'roja' ? 'roja' : 'amarilla'])}%.`;
+  }
+  const classes = dashboard.clases_hoy || [];
+  $('#learner-classes-today').innerHTML = classes.length
+    ? classes.map(item => `<article class="learner-class"><strong>${escapeHtml(String(item.hora_inicio || '').slice(0,5))}–${escapeHtml(String(item.hora_fin || '').slice(0,5))} · ${escapeHtml(item.asignatura || item.competencia || 'Clase')}</strong><span>${escapeHtml(item.competencia || 'Sin competencia')} · ${escapeHtml(item.ambiente || 'Sin ambiente')}</span><small>${escapeHtml(item.instructor || 'Instructor por asignar')} · Ficha ${escapeHtml(item.ficha_codigo || '')}</small></article>`).join('')
+    : '<p class="empty-row">No tienes clases programadas para hoy.</p>';
+  const badge = $('#learner-notification-count');
+  if (badge) {
+    badge.textContent = Number(dashboard.notificaciones_sin_leer) > 99 ? '99+' : String(Number(dashboard.notificaciones_sin_leer || 0));
+    badge.classList.toggle('hidden', Number(dashboard.notificaciones_sin_leer) === 0);
   }
 }
 
@@ -395,10 +499,20 @@ async function showModule(key) {
   if (key === 'users' && activeModule !== 'users') userRoleFilter = 'todos';
   if (key !== 'student-progress') showWeeklyAvailability = false;
   activeModule = key;
+  if (key === 'schedules' && currentUser.rol === 'estudiante' && !$('#learner-schedule-date').value) {
+    $('#learner-schedule-date').value = bogotaDate();
+  }
+  $('#learner-schedule-day').classList.toggle('active', learnerScheduleView === 'day');
+  $('#learner-schedule-week').classList.toggle('active', learnerScheduleView === 'week');
+  if (key === 'settings') settingsChanged = false;
   $('#dashboard-view').classList.add('hidden');
   $('#resource-view').classList.remove('hidden');
   $('#page-title').textContent = modules[key].label;
   $('#page-kicker').textContent = 'GESTIÓN DE MÓDULOS';
+  $('#settings-panel').classList.toggle('hidden', key !== 'settings');
+  $('#table-panel').classList.toggle('hidden', ['settings','profile'].includes(key));
+  $('#learner-profile-panel').classList.toggle('hidden', key !== 'profile');
+  $('#learner-schedule-controls').classList.toggle('hidden', key !== 'schedules' || currentUser.rol !== 'estudiante');
   $('#table-title').textContent = modules[key].label;
   const showingStudentNotifications = key === 'notifications' && currentUser.rol === 'estudiante';
   $('#table-panel').classList.toggle('notifications-mode', showingStudentNotifications);
@@ -415,7 +529,7 @@ async function showModule(key) {
     : key === 'registration-requests'
     ? 'Revisa las solicitudes de instructores y portería antes de activar sus cuentas.'
     : 'Consulta y administra los registros del sistema.';
-  $('#student-attendance-overview').classList.toggle('hidden', currentUser.rol !== 'estudiante');
+  $('#student-attendance-overview').classList.toggle('hidden', currentUser.rol !== 'estudiante' || key !== 'attendance');
   const progressView = key === 'student-progress' && ['administrador','instructor'].includes(currentUser.rol);
   const instructorProgress = progressView && currentUser.rol === 'instructor';
   $('#attendance-toolbar').classList.toggle('hidden', key !== 'attendance' && !progressView || currentUser.rol === 'estudiante');
@@ -423,19 +537,35 @@ async function showModule(key) {
   $('#availability-toggle').classList.toggle('hidden', !instructorProgress);
   $('#availability-toggle').textContent = showWeeklyAvailability ? 'Volver a aprendices' : 'Disponibilidad semanal de ambientes';
   $('#add-record').classList.toggle('hidden', key === 'registration-requests' || key === 'attendance' ||
+    key === 'excuses' || key === 'formation' ||
+    modules[key].readOnly ||
     currentUser.rol === 'estudiante' ||
     key === 'notifications' && currentUser.rol === 'estudiante' ||
     key === 'environments' && currentUser.rol === 'instructor' ||
     key === 'ficha-assignments' && currentUser.rol === 'instructor');
-  $('#export-report').classList.toggle('hidden', ['registration-requests','student-progress'].includes(key) ||
-    currentUser.rol === 'estudiante' && !['schedules','attendance','notifications'].includes(key));
-  $('#report-format').classList.toggle('hidden', key === 'registration-requests');
+  $('#report-format').classList.toggle('hidden', currentUser.rol === 'estudiante' || ['registration-requests','settings','audit-log'].includes(key));
+  $('#export-report').classList.toggle('hidden', currentUser.rol === 'estudiante' || ['registration-requests','student-progress','settings','audit-log','excuses','evaluations','formation','profile'].includes(key));
   setActiveNav(key);
   await loadTable();
 }
 
 async function loadTable() {
   const module = activeModule;
+  if (module === 'settings') {
+    try {
+      const settings = await api('settings');
+      if (activeModule !== module) return;
+      const form = $('#settings-form');
+      Object.entries(settings).forEach(([key, value]) => {
+        const input = form.elements.namedItem(key);
+        if (input) input.value = String(value);
+      });
+      $('#settings-message').textContent = '';
+    } catch (error) {
+      $('#settings-message').textContent = error.message;
+    }
+    return;
+  }
   if (module === 'student-progress' && ['administrador','instructor'].includes(currentUser.rol)) {
     if (currentUser.rol === 'instructor') {
       if (showWeeklyAvailability) {
@@ -456,13 +586,45 @@ async function loadTable() {
     await loadStudentAttendance();
     return;
   }
+  if (module === 'schedules' && currentUser.rol === 'estudiante') {
+    await loadLearnerSchedule();
+    return;
+  }
+  if (module === 'notifications' && currentUser.rol === 'estudiante') {
+    const notifications = await api('learner/notifications');
+    if (activeModule === module) renderStudentNotifications(notifications);
+    return;
+  }
+  if (module === 'excuses') {
+    const rows = await api(currentUser.rol === 'estudiante' ? 'learner/excuses' : 'excuses');
+    if (activeModule === module) renderExcuses(rows, currentUser.rol === 'estudiante');
+    return;
+  }
+  if (module === 'formation' && currentUser.rol === 'estudiante') {
+    const rows = await api('learner/formation');
+    if (activeModule === module) renderLearnerFormation(rows);
+    return;
+  }
+  if (module === 'profile' && currentUser.rol === 'estudiante') {
+    const profile = await api('learner/profile');
+    if (activeModule !== module) return;
+    const form = $('#learner-profile-form');
+    form.elements.correo.value = profile.correo || '';
+    form.elements.telefono.value = profile.telefono || '';
+    form.elements.current_password.value = '';
+    form.elements.password.value = '';
+    form.elements.pin.value = '';
+    $('#learner-profile-message').textContent = '';
+    return;
+  }
+  if (module === 'evaluations') {
+    const rows = await api('evaluations');
+    if (activeModule === module) renderEvaluations(rows);
+    return;
+  }
   if (currentUser.rol === 'estudiante') {
     $('#table-title').textContent = modules[module].label;
     $('#table-description').textContent = 'Consulta la información actualizada de tu formación.';
-  }
-  if (currentUser.rol === 'estudiante') {
-    const summary = await api('attendance/summary');
-    renderStudentAttendanceSummary(summary);
   }
   const data = await api(module);
   if (activeModule !== module) return;
@@ -473,14 +635,6 @@ async function loadTable() {
   }
   if (module === 'ficha-assignments' && currentUser.rol === 'instructor') {
     $('#table-description').textContent = 'Aprendices inscritos en las fichas que tienes asignadas. Administración conserva su acceso general.';
-  }
-  if (currentUser.rol === 'estudiante' && module === 'schedules') {
-    renderStudentSchedule(rows);
-    return;
-  }
-  if (currentUser.rol === 'estudiante' && module === 'notifications') {
-    renderStudentNotifications(rows);
-    return;
   }
   if (!rows.length) {
     $('#table-head').innerHTML = '';
@@ -578,48 +732,68 @@ async function loadTable() {
   }
 
   async function loadStudentAttendance() {
-    const [summary, records] = await Promise.all([api('attendance/summary'), api('attendance')]);
-    renderStudentAttendanceSummary(summary);
+    const [dashboard, records] = await Promise.all([api('learner/dashboard'), api('learner/attendance')]);
+    renderStudentAttendanceSummary(dashboard.asistencia || {});
     $('#table-message').textContent = 'Historial ordenado desde la fecha más reciente.';
     $('#table-title').textContent = 'Mi historial de asistencia';
-    $('#table-description').textContent = 'Consulta la fecha y el resultado de cada clase registrada.';
-      const headings = ['Fecha','Estado','Asignatura','Horario','Ambiente','Instructor','Ficha','Programa','Trimestre','Observación'];
+    $('#table-description').textContent = 'El porcentaje cuenta asistencias y llegadas tarde; los permisos se excluyen del total.';
+    const headings = ['Fecha','Estado','Competencia','Horario','Ambiente','Instructor','Ficha','Programa','Trimestre','Observación','Excusa'];
     $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
     $('#table-body').innerHTML = records.length
       ? records.map(record => `<tr>
           <td>${formatDisplayDate(record.fecha)}</td>
           <td><span class="attendance-state state-${escapeHtml(record.estado)}">${attendanceStatusLabel(record.estado)}</span></td>
-          <td>${escapeHtml(record.asignatura || '—')}</td>
+          <td>${escapeHtml(record.competencia || record.asignatura || '—')}</td>
           <td>${record.hora_inicio ? `${escapeHtml(String(record.hora_inicio).slice(0,5))}–${escapeHtml(String(record.hora_fin).slice(0,5))}` : '—'}</td>
           <td>${escapeHtml(record.ambiente || '—')}</td>
           <td>${escapeHtml(record.instructor || '—')}</td>
-          <td>${escapeHtml(record.ficha)} · ${escapeHtml(record.nombre_ficha)}</td>
+          <td>${escapeHtml(record.ficha_codigo)} · ${escapeHtml(record.ficha_nombre)}</td>
           <td>${escapeHtml(record.programa || '—')}</td>
           <td>${record.trimestre ? `Trimestre ${Number(record.trimestre)}` : '—'}</td>
           <td>${escapeHtml(record.observacion || '—')}</td>
+          <td>${record.estado === 'ausente' && !['pendiente','aprobada'].includes(record.estado_excusa)
+            ? `<button class="row-action" type="button" data-submit-excuse="${Number(record.id)}" data-absence-date="${escapeHtml(record.fecha)}">Presentar excusa</button>`
+            : record.estado_excusa ? `<span class="attendance-state state-${escapeHtml(record.estado_excusa)}">${escapeHtml(record.estado_excusa)}</span>` : '—'}</td>
         </tr>`).join('')
-      : '<tr><td class="empty-row" colspan="10">Aún no hay asistencias registradas.</td></tr>';
+      : '<tr><td class="empty-row" colspan="11">Aún no hay asistencias registradas.</td></tr>';
+    $('#table-body').querySelectorAll('[data-submit-excuse]').forEach(button => button.addEventListener('click', () => {
+      $('#learner-excuse-form').reset();
+      $('#learner-excuse-form').elements.asistencia_id.value = button.dataset.submitExcuse;
+      $('#learner-excuse-date').textContent = `Falta del ${formatDisplayDate(button.dataset.absenceDate)}. El plazo se valida con los días hábiles institucionales.`;
+      $('#learner-excuse-message').textContent = '';
+      $('#learner-excuse-dialog').showModal();
+    }));
   }
 
   function attendanceStatusLabel(status) {
     return ({presente:'Asistió',ausente:'Faltó',tarde:'Llegó tarde',permiso:'Permiso'})[status] || status;
   }
 
+  async function loadLearnerSchedule() {
+    const date = $('#learner-schedule-date').value || bogotaDate();
+    const query = new URLSearchParams({view:learnerScheduleView, date});
+    const result = await api(`learner/schedule?${query}`);
+    if (activeModule === 'schedules') renderStudentSchedule(result.clases || []);
+  }
+
   function renderStudentSchedule(rows) {
     $('#table-title').textContent = 'Mi horario de clases';
-    $('#table-description').textContent = 'Tus clases organizadas por día y hora.';
-    const headings = ['Día','Horario','Asignatura','Ambiente','Instructor','Ficha','Programa','Trimestre'];
+    $('#table-description').textContent = learnerScheduleView === 'day'
+      ? `Clases del ${formatDisplayDate($('#learner-schedule-date').value)}.`
+      : 'Clases organizadas por día y hora durante la semana.';
+    const headings = ['Día','Horario','Asignatura','Competencia','Ambiente','Instructor','Ficha','Programa','Trimestre'];
     $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
+    const days = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
     $('#table-body').innerHTML = rows.length
-      ? rows.map(row => `<tr><td><span class="schedule-day">${escapeHtml(row.dia)}</span></td><td>${escapeHtml(String(row.hora_inicio).slice(0,5))} – ${escapeHtml(String(row.hora_fin).slice(0,5))}</td><td><strong>${escapeHtml(row.asignatura)}</strong></td><td>${escapeHtml(row.ambiente)}</td><td>${escapeHtml(row.instructor)}</td><td>${escapeHtml(row.ficha)} · ${escapeHtml(row.nombre_ficha)}</td><td>${escapeHtml(row.programa || '—')}</td><td>${row.trimestre ? `Trimestre ${Number(row.trimestre)}` : '—'}</td></tr>`).join('')
-      : '<tr><td class="empty-row" colspan="8">Todavía no tienes horarios asignados.</td></tr>';
+      ? rows.map(row => `<tr><td><span class="schedule-day">${escapeHtml(days[Number(row.dia_semana) - 1] || '—')}</span></td><td>${escapeHtml(String(row.hora_inicio).slice(0,5))} – ${escapeHtml(String(row.hora_fin).slice(0,5))}</td><td><strong>${escapeHtml(row.asignatura || '—')}</strong></td><td>${escapeHtml(row.competencia || '—')}</td><td>${escapeHtml(row.ambiente || '—')}</td><td>${escapeHtml(row.instructor || '—')}</td><td>${escapeHtml(row.ficha_codigo)} · ${escapeHtml(row.ficha_nombre)}</td><td>${escapeHtml(row.programa || '—')}</td><td>${row.trimestre ? `Trimestre ${Number(row.trimestre)}` : '—'}</td></tr>`).join('')
+      : '<tr><td class="empty-row" colspan="9">Todavía no tienes horarios asignados.</td></tr>';
   }
 
   function renderStudentNotifications(rows) {
     $('#table-title').textContent = 'Mis notificaciones';
     $('#table-description').textContent = 'Cada aviso, con su fecha y detalle, en un formato más claro.';
     $('#table-message').textContent = rows.length
-      ? `${rows.length} ${rows.length === 1 ? 'notificación' : 'notificaciones'} recientes`
+      ? `<button id="learner-read-all" type="button" class="row-action">Marcar todas como leídas</button> · ${rows.length} ${rows.length === 1 ? 'notificación' : 'notificaciones'}`
       : '';
     $('#table-head').innerHTML = '';
     $('#table-body').innerHTML = '';
@@ -646,14 +820,100 @@ async function loadTable() {
             <span>${escapeHtml(monthYear)}</span>
           </div>
           <div class="notification-content">
-            <p class="notification-eyebrow">AVISO INSTITUCIONAL</p>
+            <p class="notification-eyebrow">${escapeHtml(row.tipo || 'sistema')} · ${escapeHtml(row.remitente || 'Sistema')}</p>
             <h3>${escapeHtml(row.titulo)}</h3>
             <p class="notification-message">${escapeHtml(displayMessage)}</p>
           </div>
-          <span class="notification-indicator" aria-hidden="true"></span>
+          ${row.leida_en
+            ? '<span class="notification-indicator" aria-label="Leída"></span>'
+            : `<button class="row-action" type="button" data-read-notification="${Number(row.id)}">Marcar como leída</button>`}
         </article>`;
       }).join('')
       : '<div class="notification-empty"><span aria-hidden="true">✓</span><strong>Todo al día</strong><p>No tienes notificaciones por ahora.</p></div>';
+    const unreadCount = rows.filter(row => !row.leida_en).length;
+    const badge = $('#learner-notification-count');
+    if (badge) {
+      badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+      badge.classList.toggle('hidden', unreadCount === 0);
+    }
+    $('#notification-list').querySelectorAll('[data-read-notification]').forEach(button => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          await api(`learner/notifications/${Number(button.dataset.readNotification)}/read`, {method:'PATCH',body:'{}'});
+          await loadTable();
+        } catch (error) {
+          button.disabled = false;
+          $('#table-message').textContent = error.message;
+        }
+      });
+    });
+    $('#learner-read-all')?.addEventListener('click', async () => {
+      try {
+        await api('learner/notifications/read-all', {method:'POST',body:'{}'});
+        await loadTable();
+      } catch (error) { $('#table-message').textContent = error.message; }
+    });
+  }
+
+  function renderExcuses(rows, isLearner) {
+    $('#table-title').textContent = isLearner ? 'Mis excusas' : 'Revisión de excusas';
+    $('#table-description').textContent = isLearner
+      ? 'Consulta el estado de tus excusas y las faltas asociadas.'
+      : 'Revisa soportes de aprendices de tus fichas y aprueba o rechaza cada excusa pendiente.';
+    $('#table-message').textContent = rows.length ? `${rows.length} excusas` : 'No hay excusas para mostrar.';
+    const headings = isLearner
+      ? ['Fecha de falta','Motivo','Estado','Estado de asistencia','Revisión']
+      : ['Aprendiz','Ficha','Fecha de falta','Motivo','Soporte','Estado','Acciones'];
+    $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
+    $('#table-body').innerHTML = rows.length ? rows.map(row => isLearner
+      ? `<tr><td>${formatDisplayDate(row.fecha_asistencia || row.fecha)}</td><td>${escapeHtml(row.descripcion)}</td><td>${escapeHtml(row.estado_excusa || 'Sin presentar')}</td><td>${attendanceStatusLabel(row.estado_asistencia || '')}</td><td>${row.revisado_en ? formatDisplayDate(row.revisado_en) : '—'}${row.soporte_ruta ? ` · <button class="row-action" type="button" data-excuse-file="${Number(row.id)}" data-owner="learner">Ver soporte</button>` : ''}</td></tr>`
+      : `<tr><td>${escapeHtml(row.estudiante)}</td><td>${escapeHtml(row.ficha_codigo)} · ${escapeHtml(row.ficha_nombre)}</td><td>${formatDisplayDate(row.fecha_asistencia)}</td><td>${escapeHtml(row.descripcion)}</td><td>${row.soporte_ruta ? `<button class="row-action" type="button" data-excuse-file="${Number(row.id)}">Ver soporte</button>` : '—'}</td><td>${escapeHtml(row.estado_excusa)}</td><td>${row.estado_excusa === 'pendiente' ? `<button class="row-action" type="button" data-review-excuse="${Number(row.id)}" data-decision="aprobada">Aprobar</button> <button class="row-action" type="button" data-review-excuse="${Number(row.id)}" data-decision="rechazada">Rechazar</button>` : '—'}</td></tr>`
+    ).join('') : `<tr><td class="empty-row" colspan="${headings.length}">No hay excusas para mostrar.</td></tr>`;
+    $('#table-body').querySelectorAll('[data-review-excuse]').forEach(button => button.addEventListener('click', async () => {
+      const decision = button.dataset.decision;
+      if (!window.confirm(`¿${decision === 'aprobada' ? 'Aprobar' : 'Rechazar'} esta excusa?`)) return;
+      button.disabled = true;
+      try {
+        await api(`excuses/${Number(button.dataset.reviewExcuse)}/review`, {method:'POST',body:JSON.stringify({estado:decision})});
+        await loadTable();
+      } catch (error) {
+        button.disabled = false;
+        $('#table-message').textContent = error.message;
+      }
+    }));
+    $('#table-body').querySelectorAll('[data-excuse-file]').forEach(button => button.addEventListener('click', () => {
+      const route = button.dataset.owner === 'learner'
+        ? `learner/excuses/${Number(button.dataset.excuseFile)}/file`
+        : `excuses/${Number(button.dataset.excuseFile)}/file`;
+      downloadAuthorizedFile(route, `soporte-excusa-${button.dataset.excuseFile}`).catch(error => {
+        $('#table-message').textContent = error.message;
+      });
+    }));
+  }
+
+  function renderLearnerFormation(rows) {
+    $('#table-title').textContent = 'Mi formación';
+    $('#table-description').textContent = 'Competencias y resultados de aprendizaje de tus programas, con el último juicio registrado.';
+    $('#table-message').innerHTML = '<button id="download-formation-history" class="button secondary" type="button">Descargar historial PDF</button>';
+    $('#table-head').innerHTML = '<tr><th>Programa</th><th>Ficha / trimestre</th><th>Competencia</th><th>Resultado de aprendizaje</th><th>Juicio evaluativo</th><th>Fecha de evaluación</th></tr>';
+    $('#table-body').innerHTML = rows.length
+      ? rows.map(row => `<tr><td>${escapeHtml(row.programa)} · ${escapeHtml(row.programa_codigo)}</td><td>${escapeHtml(row.ficha_codigo)}${row.trimestre ? ` · Trimestre ${Number(row.trimestre)}` : ''}</td><td>${escapeHtml(row.competencia)} · ${escapeHtml(row.competencia_codigo)}</td><td>${escapeHtml(row.resultado)} <small>${escapeHtml(row.resultado_codigo)}</small></td><td>${escapeHtml(String(row.juicio).replace(/_/g,' '))}</td><td>${row.evaluado_en ? formatDisplayDate(row.evaluado_en) : '—'}</td></tr>`).join('')
+      : '<tr><td class="empty-row" colspan="6">Todavía no hay resultados de aprendizaje asociados a tu programa.</td></tr>';
+    $('#download-formation-history').addEventListener('click', () => downloadAuthorizedFile('learner/formation/pdf', 'historial-academico').catch(error => {
+      $('#table-message').textContent = error.message;
+    }));
+  }
+
+  function renderEvaluations(rows) {
+    $('#table-title').textContent = 'Juicios evaluativos';
+    $('#table-description').textContent = 'Registra o consulta el último juicio de formación de aprendices de tus fichas asignadas.';
+    $('#table-message').textContent = rows.length ? `${rows.length} evaluaciones recientes` : 'Aún no hay juicios evaluativos.';
+    const headings = ['Aprendiz','Programa','Competencia','Resultado de aprendizaje','Juicio','Fecha','Evaluador'];
+    $('#table-head').innerHTML = `<tr>${headings.map(heading => `<th>${heading}</th>`).join('')}</tr>`;
+    $('#table-body').innerHTML = rows.length
+      ? rows.map(row => `<tr><td>${escapeHtml(row.estudiante)}</td><td>${escapeHtml(row.programa)}</td><td>${escapeHtml(row.competencia)}</td><td>${escapeHtml(row.resultado_codigo)} · ${escapeHtml(row.resultado)}</td><td>${escapeHtml(String(row.juicio).replace(/_/g,' '))}</td><td>${formatDisplayDate(row.evaluado_en)}</td><td>${escapeHtml(row.evaluador)}</td></tr>`).join('')
+      : '<tr><td class="empty-row" colspan="7">Aún no hay juicios evaluativos registrados.</td></tr>';
   }
 
   function formatDisplayDate(value) {
@@ -739,23 +999,34 @@ async function loadTable() {
     }
   }
   const hiddenColumns = {
-    schedules: ['id','ficha_id','ambiente_id','instructor_id','dia_semana'],
+    schedules: ['id','ficha_id','competencia_id','ambiente_id','instructor_id','dia_semana'],
     enrollments: ['id','ficha_id','usuario_id','documento'],
     users: ['id','rol_id','ultimo_acceso','creado_en'],
     'ficha-assignments': ['id','ficha_id','instructor_id','estudiante_id'],
-    fichas: ['id'],
+    fichas: ['id','programa_id','nombre'],
+    programs: ['id'],
+    competencies: ['id','programa_id'],
+    'learning-outcomes': ['id','competencia_id','programa_id'],
+    'academic-calendar': ['id'],
+    'audit-log': ['id','entidad_id'],
   };
   const columns = Object.keys(rows[0]).filter(column => !(hiddenColumns[activeModule] || []).includes(column));
   const headings = {
-    codigo: 'Número de ficha', ficha_codigo: 'Número de ficha', ficha_nombre: 'Ficha', programa: 'Programa', trimestre: 'Trimestre',
+    codigo: 'Código', ficha_codigo: 'Número de ficha', ficha_nombre: 'Ficha', programa: 'Programa', trimestre: 'Trimestre',
+    nivel: 'Nivel', duracion_trimestres: 'Duración (trimestres)', competencia: 'Competencia',
+    competencia_id: 'Competencia', programa_id: 'Programa', competencia_programa: 'Programa',
+    descripcion: 'Descripción', fecha: 'Fecha', tipo: 'Tipo',
     ambiente_codigo: 'Código ambiente', ambiente: 'Ambiente', instructor: 'Instructor',
     estudiante: 'Aprendiz', documento: 'Documento', hora_inicio: 'Desde', hora_fin: 'Hasta',
     dia: 'Día', asignatura: 'Asignatura', inscrito_en: 'Asignado el',
     rol: 'Tipo de usuario', activo: 'Estado', estudiante_nombres: 'Nombres',
     estudiante_apellidos: 'Apellidos', aprendices: 'Aprendices asignados',
+    fecha_hora: 'Fecha y hora', actor: 'Usuario', accion: 'Acción', entidad: 'Registro',
+    detalle: 'Detalle',
   };
-  const allowDelete = (currentUser.rol === 'administrador' || currentUser.rol === 'instructor' && ['enrollments','schedules'].includes(activeModule)) && !['blocks','registration-requests'].includes(activeModule);
-  const allowEdit = modules[activeModule].roles.includes(currentUser.rol) && currentUser.rol !== 'estudiante' &&
+  const academicCatalog = ['programs','competencies','learning-outcomes','academic-calendar'].includes(activeModule);
+  const allowDelete = !academicCatalog && !modules[activeModule].readOnly && (currentUser.rol === 'administrador' || currentUser.rol === 'instructor' && ['enrollments','schedules'].includes(activeModule)) && !['blocks','registration-requests'].includes(activeModule);
+  const allowEdit = !modules[activeModule].readOnly && modules[activeModule].roles.includes(currentUser.rol) && currentUser.rol !== 'estudiante' &&
     !(activeModule === 'environments' && currentUser.rol === 'instructor') &&
     !(activeModule === 'ficha-assignments' && currentUser.rol === 'instructor');
   const canManage = currentUser.rol === 'administrador';
@@ -775,8 +1046,9 @@ async function loadTable() {
     if (activeModule === 'loans' && canManage && row.estado === 'activo') actions.push(`<button class="row-action" data-return="${Number(row.id)}">Marcar devolución</button>`);
     if (allowDelete) actions.push(`<button class="row-action" data-delete="${Number(row.id)}">Eliminar</button>`);
     return `<tr>${columns.map(col => {
-      const value = col === 'trimestre' && row[col] ? `Trimestre ${row[col]}` : col === 'dia'
-        ? row[col] : row[col];
+        const value = col === 'trimestre' && row[col] ? `Trimestre ${row[col]}`
+          : col === 'nivel' ? ({tecnico:'Técnico',tecnologo:'Tecnólogo'}[row[col]] || row[col])
+            : row[col];
       return `<td title="${escapeHtml(value)}">${escapeHtml(value)}</td>`;
     }).join('')}${hasActions ? `<td class="actions-cell"><div class="row-actions">${actions.join('')}</div></td>` : ''}</tr>`;
   }).join('');
@@ -795,30 +1067,77 @@ async function loadTable() {
   $('#table-body').querySelectorAll('[data-reject]').forEach(button => button.addEventListener('click', () => reviewRegistration(Number(button.dataset.reject), 'reject')));
 }
 
+$('#settings-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = $('#save-settings');
+  submit.disabled = true;
+  $('#settings-message').textContent = '';
+  try {
+    const values = Object.fromEntries([...new FormData(form)].map(([key, value]) => [key, Number(value)]));
+    const result = await api('settings', {method:'PUT',body:JSON.stringify(values)});
+    Object.entries(result.settings).forEach(([key, value]) => {
+      const input = form.elements.namedItem(key);
+      if (input) input.value = String(value);
+    });
+    settingsChanged = false;
+    $('#settings-message').textContent = result.message;
+  } catch (error) {
+    $('#settings-message').textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
+
 function fieldInput([name,label,type='text'], value='', lookups=null) {
   const relations = {
-    ficha_id: lookups?.fichas?.map(item => [item.id, `${item.codigo} · ${item.programa || item.nombre}${item.trimestre ? ` · Trimestre ${Number(item.trimestre)}` : ''}`]),
+    ficha_id: lookups?.fichas?.filter(item => String(item.id) === String(value) ||
+      (activeModule === 'schedules' && currentUser.rol === 'administrador'
+        ? item.estado === 'activa'
+        : Number(item.vigente) === 1))
+      .map(item => [item.id, `${item.codigo} · ${item.programa || item.nombre}${item.trimestre ? ` · Trimestre ${Number(item.trimestre)}` : ''}`]),
+    programa_id: lookups?.programas?.filter(item => item.estado === 'activo' || String(item.id) === String(value))
+      .map(item => [item.id, `${item.codigo} · ${item.nombre}`]),
+    competencia_id: lookups?.competencias?.filter(item => item.estado === 'activo' || String(item.id) === String(value))
+      .map(item => [item.id, `${item.codigo} · ${item.nombre}`]),
     ambiente_id: lookups?.ambientes?.map(item => [item.id, `${item.codigo} · ${item.nombre}`]),
     instructor_id: lookups?.instructores?.map(item => [item.id, `${item.nombres} ${item.apellidos} · ${item.documento}`]),
     usuario_id: activeModule === 'enrollments' ? lookups?.estudiantes?.map(item => [item.id, `${item.nombres} ${item.apellidos} · ${item.documento}`]) : null,
+    estudiante_id: activeModule === 'evaluations' ? lookups?.estudiantes?.map(item => [item.id, `${item.nombres} ${item.apellidos} · ${item.documento}`]) : null,
+    resultado_id: activeModule === 'evaluations' ? lookups?.resultados?.map(item => [item.id, item.etiqueta]) : null,
+    asistencia_id: lookups?.ausencias?.map(item => [item.id, `#${item.id} · ${item.fecha} · Aprendiz ${item.usuario_id}`]),
     rol_id: [[1,'Administrador'],[2,'Instructor'],[3,'Estudiante'],[4,'Portería']],
   };
   let selectOptions = null;
   if (relations[name]) selectOptions = relations[name];
+  else if (activeModule === 'programs' && name === 'nivel') selectOptions = [['tecnico','Técnico'],['tecnologo','Tecnólogo']];
+  else if (['programs','competencies','learning-outcomes','academic-calendar'].includes(activeModule) && name === 'estado') selectOptions = [['activo','Activo'],['inactivo','Inactivo']];
+  else if (activeModule === 'academic-calendar' && name === 'tipo') selectOptions = [['festivo','Festivo'],['vacaciones','Vacaciones']];
+  else if (activeModule === 'evaluations' && name === 'juicio') selectOptions = [['aprobado','Aprobado'],['no_aprobado','No aprobado'],['por_evaluar','Por evaluar']];
   else if (name === 'trimestre') selectOptions = [[1,'Trimestre 1'],[2,'Trimestre 2'],[3,'Trimestre 3'],[4,'Trimestre 4'],[5,'Trimestre 5'],[6,'Trimestre 6']];
   else if (name === 'dia_semana') selectOptions = [[1,'Lunes'],[2,'Martes'],[3,'Miércoles'],[4,'Jueves'],[5,'Viernes'],[6,'Sábado'],[7,'Domingo']];
   if (selectOptions) {
-    const optional = name === 'trimestre';
+    const optional = ['trimestre','asistencia_id'].includes(name) ||
+      name === 'competencia_id' && editId !== null && !value;
     const options = selectOptions.map(([optionValue,optionLabel]) =>
       `<option value="${escapeHtml(optionValue)}"${String(value) === String(optionValue) ? ' selected' : ''}>${escapeHtml(optionLabel)}</option>`
     ).join('');
-    return `<label>${escapeHtml(label)}<select name="${escapeHtml(name)}" ${optional ? '' : 'required'}>${optional ? '<option value="">Sin asignar</option>' : ''}${options}</select></label>`;
+    return `<label>${escapeHtml(label)}<select name="${escapeHtml(name)}" ${optional ? '' : 'required'}>${optional ? '<option value="">Sin asignar</option>' : '<option value="">Selecciona una opción</option>'}${options}</select></label>`;
   }
   const inputType = ['number','email','date','time','datetime-local','password'].includes(type) ? type : 'text';
+  if (name === 'descripcion' && ['learning-outcomes','academic-calendar'].includes(activeModule)) {
+    const maximum = activeModule === 'academic-calendar' ? 250 : 500;
+    return `<label>${escapeHtml(label)}<textarea name="${escapeHtml(name)}" rows="3" maxlength="${maximum}" required>${escapeHtml(value)}</textarea></label>`;
+  }
   const optionalIdentity = ['accesses','temporary-permits'].includes(activeModule) && ['usuario_id','visitante_id'].includes(name);
   const fichaNumber = activeModule === 'fichas' && name === 'codigo';
-  const required = ['password','documento','nombres','apellidos','correo','rol_id','codigo','nombre','programa','ubicacion','capacidad','ficha_id','ambiente_id','instructor_id','hora_inicio','hora_fin','asignatura','inicio','fin','motivo','estado','usuario_id','fecha','tipo','serial','categoria','equipo_id','vence_en','dia_semana','desde','hasta','fecha_inicio','fecha_fin'].includes(name) && !(optionalIdentity || activeModule === 'accesses' && name === 'serial');
-  return `<label>${escapeHtml(label)}<input name="${escapeHtml(name)}" type="${fichaNumber ? 'text' : inputType}" value="${inputType === 'password' ? '' : escapeHtml(value)}" ${name === 'password' ? 'minlength="8"' : ''} ${fichaNumber ? 'inputmode="numeric" pattern="[0-9]{7}" maxlength="7" minlength="7" title="Escribe exactamente 7 dígitos numéricos."' : ''} ${required ? 'required' : ''}></label>`;
+  const required = ['password','documento','nombres','apellidos','correo','rol_id','codigo','nombre','programa','ubicacion','capacidad','ficha_id','programa_id','ambiente_id','instructor_id','hora_inicio','hora_fin','asignatura','inicio','fin','motivo','estado','usuario_id','fecha','tipo','serial','categoria','equipo_id','vence_en','dia_semana','desde','hasta','fecha_inicio','fecha_fin','duracion_trimestres','descripcion'].includes(name) && !(optionalIdentity || activeModule === 'accesses' && name === 'serial');
+  const maximumLength = name === 'descripcion'
+    ? `maxlength="${activeModule === 'academic-calendar' ? 250 : 500}"`
+    : name === 'nombre' ? `maxlength="${activeModule === 'programs' ? 150 : 180}"`
+      : name === 'codigo' ? 'maxlength="40"' : '';
+  const minValue = name === 'duracion_trimestres' ? 'min="1" max="65535"' : '';
+  return `<label>${escapeHtml(label)}<input name="${escapeHtml(name)}" type="${fichaNumber ? 'text' : inputType}" value="${inputType === 'password' ? '' : escapeHtml(value)}" ${name === 'password' ? 'minlength="8"' : ''} ${fichaNumber ? 'inputmode="numeric" pattern="[0-9]{7}" maxlength="7" minlength="7" title="Escribe exactamente 7 dígitos numéricos."' : ''} ${maximumLength} ${minValue} ${required ? 'required' : ''}></label>`;
 }
 
 function showFichaDetails(ficha) {
@@ -838,14 +1157,50 @@ async function openForm(record = null) {
   editId = record ? Number(record.id) : null;
   $('#dialog-title').textContent = `${editId ? 'Editar' : 'Nuevo registro'} · ${modules[activeModule].label}`;
   $('#dialog-message').textContent = '';
-  const lookups = ['schedules','enrollments','ficha-assignments'].includes(activeModule) ? await api('options') : null;
+  let lookups = ['schedules','enrollments','ficha-assignments','fichas','competencies','learning-outcomes','evaluations'].includes(activeModule)
+    ? await api('options') : null;
+  if (activeModule === 'novelties') {
+    const absences = await api('attendance?estado=ausente');
+    if (record?.asistencia_id && !absences.some(item => Number(item.id) === Number(record.asistencia_id))) {
+      absences.unshift({id:record.asistencia_id,fecha:record.fecha,usuario_id:record.usuario_id});
+    }
+    lookups = {ausencias:absences};
+  }
   $('#record-fields').innerHTML = modules[activeModule].fields.map(field => {
     const [name] = field;
-    let value = record?.[name] ?? '';
+    let value = record?.[name] ?? (name === 'estado' ? 'activo' : name === 'tipo' && activeModule === 'academic-calendar' ? 'festivo' : '');
     if (field[2] === 'datetime-local' && value) value = String(value).replace(' ', 'T').slice(0,16);
     const input = fieldInput(field, value, lookups);
     return editId && name === 'password' ? input.replace(' required', '') : input;
   }).join('');
+  if (activeModule === 'schedules') {
+    const fichaField = $('#record-fields [name="ficha_id"]');
+    const competencyField = $('#record-fields [name="competencia_id"]');
+    const refreshCompetencies = () => {
+      const ficha = lookups.fichas.find(item => String(item.id) === fichaField.value);
+      const existingCompetency = record?.competencia_id;
+      const compatible = lookups.competencias.filter(item =>
+        ficha?.programa_id && Number(item.programa_id) === Number(ficha.programa_id) &&
+        (item.estado === 'activo' || Number(item.id) === Number(existingCompetency))
+      );
+      const selected = compatible.some(item => String(item.id) === competencyField.value)
+        ? competencyField.value : '';
+      competencyField.innerHTML = '<option value="">Selecciona una competencia</option>' +
+        compatible.map(item => `<option value="${Number(item.id)}">${escapeHtml(`${item.codigo} · ${item.nombre}`)}</option>`).join('');
+      competencyField.value = selected;
+    };
+    fichaField.addEventListener('change', refreshCompetencies);
+    refreshCompetencies();
+  }
+  if (activeModule === 'novelties') {
+    const typeField = $('#record-fields [name="tipo"]');
+    const attendanceField = $('#record-fields [name="asistencia_id"]');
+    const updateExcuseRequirement = () => {
+      attendanceField.required = typeField.value.trim().toLowerCase() === 'inasistencia';
+    };
+    typeField.addEventListener('input', updateExcuseRequirement);
+    updateExcuseRequirement();
+  }
   $('#record-dialog').showModal();
 }
 
@@ -903,14 +1258,20 @@ $('#legacy-login-form').addEventListener('submit', async event => {
   $('#login-message').textContent = '';
   const form = new FormData(event.currentTarget);
   try {
-    const authenticatedUser = await api('auth/login',{method:'POST',body:JSON.stringify({correo:form.get('correo'),password:form.get('password')})});
+    const authenticatedUser = await api('auth/login',{method:'POST',body:JSON.stringify({
+      identificador:form.get('identificador'),
+      password:form.get('password'),
+      pin:form.get('pin')
+    })});
     if (loginExpectedRole && authenticatedUser.rol !== loginExpectedRole) {
       await api('auth/logout', {method:'POST'});
       throw new Error('Esta cuenta no tiene el rol requerido para este acceso.');
     }
     await startApp();
     await openMyCard();
-    $('#card-dialog-message').textContent = 'Acceso temporal para una cuenta existente. Descarga y conserva este carné; los próximos ingresos se hacen con su QR.';
+    $('#card-dialog-message').textContent = authenticatedUser.pin_configurado
+      ? 'Puedes ingresar con tu documento o correo, contraseña, o con el QR de este carné y tu PIN.'
+      : 'Para habilitar el ingreso con QR, vuelve a ingresar con tu documento o correo, contraseña y un PIN de 4 a 6 números.';
   } catch (error) {
     $('#login-message').textContent = error.message;
   }
@@ -933,6 +1294,9 @@ function showLanding() {
 function showLogin(expectedRole = null) {
   loginExpectedRole = expectedRole;
   stopLoginScanner();
+  pendingLoginQrCode = null;
+  $('#login-pin-panel').classList.add('hidden');
+  $('#login-pin-form').reset();
   $('#legacy-login-form').reset();
   $('#login-message').textContent = '';
   $('#login-screen .login-card h1').textContent = expectedRole === 'administrador' ? 'Acceso de administrador' : 'Acceso a tu cuenta';
@@ -941,7 +1305,7 @@ function showLogin(expectedRole = null) {
     : 'Ingresa con el código QR de tu carné. Este acceso funciona para estudiantes y equipo institucional.';
   $('#login-scan-message').textContent = expectedRole === 'administrador'
     ? 'Escanea el QR asignado a una cuenta administradora o elige una imagen del código.'
-    : 'Escanea el QR de tu carné o elige una imagen que lo contenga. Cualquier persona con una copia del QR podrá entrar a tu cuenta.';
+    : 'Escanea el QR de tu carné o elige una imagen que lo contenga. También necesitarás el PIN del carné.';
   $('#landing-screen').classList.add('hidden');
   $('#login-screen').classList.remove('hidden');
 }
@@ -1173,18 +1537,61 @@ async function loginWithQr(value, controls = loginScannerControls) {
   if (!qrCode) return;
   loginScanCompleted = true;
   stopLoginScanner(controls);
-  $('#login-scan-message').textContent = 'Verificando el carné...';
+  $('#login-scan-message').textContent = 'Validando el carné...';
   try {
-    const authenticatedUser = await api('auth/qr-login', {method:'POST',body:JSON.stringify({codigo_qr:qrCode})});
-    if (loginExpectedRole && authenticatedUser.rol !== loginExpectedRole) {
-      await api('auth/logout', {method:'POST'});
-      throw new Error('Este carné no corresponde a una cuenta administradora. Usa el acceso indicado para tu rol.');
+    const result = await api('auth/qr-preview', {method:'POST',body:JSON.stringify({codigo_qr:qrCode})});
+    const account = result.usuario;
+    if (!account) throw new Error('No se pudo validar el carné.');
+    pendingLoginQrCode = qrCode;
+    $('#login-pin-name').textContent = `${account.nombres} ${account.apellidos}`;
+    $('#login-pin-document').textContent = 'Confirma que la foto y el nombre sean tuyos.';
+    const photo = $('#login-pin-photo');
+    if (account.foto) {
+      photo.src = account.foto;
+      photo.classList.remove('hidden');
+    } else {
+      photo.removeAttribute('src');
+      photo.classList.add('hidden');
     }
-    await startApp();
+    $('#login-pin-panel').classList.remove('hidden');
+    $('#login-scan-message').textContent = 'Confirma que el carné corresponde a tu cuenta e ingresa tu PIN.';
+    $('#login-pin-form [name="pin"]').focus();
   } catch (error) {
     $('#login-scan-message').textContent = error.message;
   }
 }
+
+$('#login-pin-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!pendingLoginQrCode) return;
+  const submit = event.currentTarget.querySelector('[type="submit"]');
+  submit.disabled = true;
+  $('#login-scan-message').textContent = 'Verificando el PIN...';
+  try {
+    const pin = new FormData(event.currentTarget).get('pin');
+    const authenticatedUser = await api('auth/qr-login', {
+      method:'POST',
+      body:JSON.stringify({codigo_qr:pendingLoginQrCode,pin})
+    });
+    if (loginExpectedRole && authenticatedUser.rol !== loginExpectedRole) {
+      await api('auth/logout', {method:'POST'});
+      throw new Error('Este carné no corresponde a una cuenta administradora. Usa el acceso indicado para tu rol.');
+    }
+    pendingLoginQrCode = null;
+    await startApp();
+  } catch (error) {
+    $('#login-scan-message').textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+$('#login-pin-cancel').addEventListener('click', () => {
+  pendingLoginQrCode = null;
+  $('#login-pin-form').reset();
+  $('#login-pin-panel').classList.add('hidden');
+  $('#login-scan-message').textContent = 'Escanea el QR de tu carné o elige una imagen que lo contenga.';
+});
 
 $('#scan-login-barcode').addEventListener('click', async () => {
   if (loginScannerStarting || loginScannerControls) return;
@@ -1665,6 +2072,9 @@ $('#registration-form').addEventListener('submit', async event => {
     if (values.get('password') !== values.get('confirm_password')) {
       throw new Error('Las contraseñas no coinciden.');
     }
+    if (values.get('pin') !== values.get('confirm_pin')) {
+      throw new Error('Los PIN no coinciden.');
+    }
     const result = await api('auth/register', {method:'POST',body:JSON.stringify(await registrationRequestBody(values))});
     await finishRegistration(result, form);
   } catch (error) {
@@ -1681,11 +2091,14 @@ async function registrationRequestBody(values = new FormData($('#registration-fo
   }
   return {
       rol:values.get('rol'),
+      tipo_documento:values.get('tipo_documento'),
       documento:values.get('documento'),
       nombres:values.get('nombres'),
       apellidos:values.get('apellidos'),
       correo:values.get('correo'),
       password:values.get('password'),
+      pin:values.get('pin'),
+      acepta_tratamiento_datos:values.get('acepta_tratamiento_datos') === 'on',
       telefono:values.get('telefono'),
       ...(values.get('rol') === 'estudiante' ? {ficha_id:Number(values.get('ficha_id'))} : {}),
       foto:photoFile ? await readFileAsDataUrl(photoFile) : null
@@ -1779,7 +2192,7 @@ $('#record-form').addEventListener('submit', async event => {
   if (event.submitter?.value === 'cancel') return;
   event.preventDefault();
   const formData = new FormData(event.currentTarget);
-  const payload = Object.fromEntries([...formData.entries()].filter(([,value]) => value !== '').map(([key,value]) => [key, ['rol_id','capacidad','ficha_id','ambiente_id','instructor_id','dia_semana','usuario_id','visitante_id','equipo_id','autorizado'].includes(key) ? Number(value) : value]));
+  const payload = Object.fromEntries([...formData.entries()].filter(([,value]) => value !== '').map(([key,value]) => [key, ['rol_id','capacidad','ficha_id','ambiente_id','instructor_id','dia_semana','usuario_id','asistencia_id','visitante_id','equipo_id','autorizado'].includes(key) ? Number(value) : value]));
   try {
     await api(editId ? `${activeModule}/${editId}` : activeModule,{method:editId ? 'PATCH' : 'POST',body:JSON.stringify(payload)});
     $('#record-dialog').close();
@@ -1787,6 +2200,81 @@ $('#record-form').addEventListener('submit', async event => {
     $('#table-message').textContent = 'Registro guardado correctamente.';
   } catch (error) {
     $('#dialog-message').textContent = error.message;
+  }
+});
+
+$('#learner-schedule-day').addEventListener('click', () => {
+  learnerScheduleView = 'day';
+  $('#learner-schedule-day').classList.add('active');
+  $('#learner-schedule-week').classList.remove('active');
+  loadTable().catch(showError);
+});
+$('#learner-schedule-week').addEventListener('click', () => {
+  learnerScheduleView = 'week';
+  $('#learner-schedule-day').classList.remove('active');
+  $('#learner-schedule-week').classList.add('active');
+  loadTable().catch(showError);
+});
+$('#learner-schedule-date').addEventListener('change', () => {
+  if (activeModule === 'schedules') loadTable().catch(showError);
+});
+document.addEventListener('click', event => {
+  const moduleButton = event.target.closest('[data-open-module]');
+  if (moduleButton && currentUser?.rol === 'estudiante') {
+    showModule(moduleButton.dataset.openModule).catch(showError);
+  }
+});
+
+function closeLearnerExcuseDialog() {
+  $('#learner-excuse-dialog').close();
+  $('#learner-excuse-form').reset();
+}
+$('#close-learner-excuse').addEventListener('click', closeLearnerExcuseDialog);
+$('#cancel-learner-excuse').addEventListener('click', closeLearnerExcuseDialog);
+$('#learner-excuse-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector('[type="submit"]');
+  submit.disabled = true;
+  $('#learner-excuse-message').textContent = '';
+  try {
+    await api('learner/excuses', {method:'POST',body:new FormData(form)});
+    closeLearnerExcuseDialog();
+    await loadTable();
+    $('#table-message').textContent = 'La excusa se envió y quedó pendiente de revisión.';
+  } catch (error) {
+    $('#learner-excuse-message').textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+$('#learner-profile-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = {
+    correo:form.elements.correo.value.trim(),
+    telefono:form.elements.telefono.value.trim()
+  };
+  if (form.elements.password.value) payload.password = form.elements.password.value;
+  if (form.elements.pin.value) payload.pin = form.elements.pin.value;
+  if (payload.password || payload.pin) payload.current_password = form.elements.current_password.value;
+  const submit = form.querySelector('[type="submit"]');
+  submit.disabled = true;
+  $('#learner-profile-message').textContent = '';
+  try {
+    await api('learner/profile', {method:'PATCH',body:JSON.stringify(payload)});
+    form.elements.current_password.value = '';
+    form.elements.password.value = '';
+    form.elements.pin.value = '';
+    $('#learner-profile-message').textContent = 'Tu perfil se actualizó correctamente.';
+    const profile = await api('learner/profile');
+    currentUser.correo = profile.correo;
+    currentUser.telefono = profile.telefono;
+  } catch (error) {
+    $('#learner-profile-message').textContent = error.message;
+  } finally {
+    submit.disabled = false;
   }
 });
 

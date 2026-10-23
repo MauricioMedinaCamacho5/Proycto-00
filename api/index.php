@@ -19,7 +19,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
 }
-
 function respond(array $data, int $status = 200): void
 {
     http_response_code($status);
@@ -42,13 +41,124 @@ function audit(PDO $db, ?int $actor, string $action, string $entity, ?int $id = 
     $stmt->execute([$actor, $action, $entity, $id, $detail ? json_encode($detail, JSON_UNESCAPED_UNICODE) : null]);
 }
 
-function notifyUsers(PDO $db, array $userIds, string $title, string $message): void
+function notifyUsers(PDO $db, array $userIds, string $title, string $message, ?string $type = null, ?int $senderId = null): void
 {
-    $insert = $db->prepare('INSERT INTO notificaciones (usuario_id, titulo, mensaje) VALUES (?, ?, ?)');
+    $insert = $db->prepare('INSERT INTO notificaciones (usuario_id, titulo, tipo, remitente_id, mensaje) VALUES (?, ?, ?, ?, ?)');
     foreach (array_unique(array_map('intval', $userIds)) as $userId) {
         if ($userId > 0) {
-            $insert->execute([$userId, $title, $message]);
+            $insert->execute([$userId, $title, $type, $senderId, $message]);
         }
+    }
+}
+
+function systemSettings(PDO $db): array
+{
+    $rows = $db->query('SELECT clave, valor FROM configuracion_sistema')->fetchAll();
+    $settings = [];
+    foreach ($rows as $row) {
+        $settings[$row['clave']] = (int)$row['valor'];
+    }
+    return $settings;
+}
+
+function requireAttendanceCorrectionWindow(PDO $db, int $attendanceId, array $actor): void
+{
+    if ($actor['rol'] === 'administrador') {
+        return;
+    }
+
+    $elapsedStmt = $db->prepare('SELECT TIMESTAMPDIFF(SECOND, registrado_en, CURRENT_TIMESTAMP)
+        FROM asistencias WHERE id = ?');
+    $elapsedStmt->execute([$attendanceId]);
+    $elapsedSeconds = $elapsedStmt->fetchColumn();
+    $hours = systemSettings($db)['horas_correccion_asistencia'] ?? 48;
+    if ($elapsedSeconds === false || (int)$elapsedSeconds < 0 || (int)$elapsedSeconds > $hours * 3600) {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        respond(['error' => "El plazo de {$hours} horas para corregir esta asistencia ya venció. Solicita la corrección a administración."], 409);
+    }
+}
+
+function businessDaysSince(PDO $db, string $date): ?int
+{
+    $today = (string)$db->query('SELECT CURRENT_DATE()')->fetchColumn();
+    $start = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+    $end = DateTimeImmutable::createFromFormat('!Y-m-d', $today);
+    if (!$start || !$end || $start->format('Y-m-d') !== $date || $start > $end) {
+        return null;
+    }
+
+    $elapsedDays = (int)$start->diff($end)->days;
+    $businessDays = intdiv($elapsedDays, 7) * 5;
+    for ($offset = 1; $offset <= $elapsedDays % 7; $offset++) {
+        if ((int)$start->modify("+{$offset} days")->format('N') <= 5) {
+            $businessDays++;
+        }
+    }
+    $calendar = $db->prepare("SELECT COUNT(DISTINCT fecha) FROM calendario_academico
+        WHERE estado = 'activo' AND fecha > ? AND fecha <= ? AND WEEKDAY(fecha) < 5");
+    $calendar->execute([$date, $today]);
+    return max(0, $businessDays - (int)$calendar->fetchColumn());
+}
+
+function validateAbsenceExcuse(PDO $db, array &$data, array $actor, ?array $current = null): void
+{
+    $effective = array_merge($current ?? [], $data);
+    $isExcuse = ($effective['tipo'] ?? null) === 'inasistencia';
+    if (!$isExcuse && empty($effective['asistencia_id'])) {
+        return;
+    }
+
+    $identityFields = ['usuario_id','asistencia_id','tipo','fecha'];
+    $identityChanged = $current === null;
+    foreach ($identityFields as $field) {
+        if (array_key_exists($field, $data) && (string)$data[$field] !== (string)($current[$field] ?? '')) {
+            $identityChanged = true;
+        }
+    }
+    if (!$identityChanged) {
+        return;
+    }
+
+    $attendanceId = $effective['asistencia_id'] ?? null;
+    $studentId = $effective['usuario_id'] ?? null;
+    $date = (string)($effective['fecha'] ?? '');
+    if (!ctype_digit((string)$attendanceId) || (int)$attendanceId < 1 ||
+        !ctype_digit((string)$studentId) || (int)$studentId < 1) {
+        respond(['error' => 'Para registrar una excusa selecciona la asistencia ausente y el aprendiz.'], 422);
+    }
+
+    $attendanceStmt = $db->prepare('SELECT id, usuario_id, ficha_id, fecha, estado
+        FROM asistencias WHERE id = ?');
+    $attendanceStmt->execute([(int)$attendanceId]);
+    $attendance = $attendanceStmt->fetch();
+    if (!$attendance || (int)$attendance['usuario_id'] !== (int)$studentId ||
+        $attendance['fecha'] !== $date) {
+        respond(['error' => 'La asistencia seleccionada no corresponde al aprendiz y la fecha de la excusa.'], 422);
+    }
+    if ($attendance['estado'] !== 'ausente') {
+        if ($isExcuse) {
+            respond(['error' => 'Solo se puede presentar una excusa para una asistencia marcada como ausente.'], 409);
+        }
+    }
+    if ($actor['rol'] === 'instructor') {
+        $assignedFicha = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+        $assignedFicha->execute([(int)$attendance['ficha_id'], (int)$actor['id']]);
+        if (!$assignedFicha->fetchColumn()) {
+            respond(['error' => 'Solo puedes registrar excusas de tus fichas asignadas.'], 403);
+        }
+    }
+
+    if ($isExcuse) {
+        $elapsedBusinessDays = businessDaysSince($db, (string)$attendance['fecha']);
+        $deadlineDays = systemSettings($db)['dias_habiles_excusa'] ?? 3;
+        if ($elapsedBusinessDays === null || $elapsedBusinessDays > $deadlineDays) {
+            respond(['error' => "El plazo de {$deadlineDays} días hábiles para presentar esta excusa ya venció."], 409);
+        }
+        $data['asistencia_id'] = (int)$attendance['id'];
+        $data['usuario_id'] = (int)$attendance['usuario_id'];
+        $data['fecha'] = (string)$attendance['fecha'];
     }
 }
 
@@ -121,9 +231,11 @@ function notifyFormationChange(PDO $db, string $table, int $recordId): void
     }
     if ($table === 'horarios') {
         $stmt = $db->prepare("SELECT h.ficha_id, h.asignatura, h.dia_semana, h.hora_inicio, h.hora_fin,
+                c.nombre AS competencia,
                 f.codigo, f.nombre, f.programa, f.trimestre, a.nombre AS ambiente,
                 CONCAT(u.nombres, ' ', u.apellidos) AS instructor
             FROM horarios h JOIN fichas f ON f.id = h.ficha_id
+            LEFT JOIN competencias c ON c.id = h.competencia_id
             JOIN ambientes a ON a.id = h.ambiente_id
             JOIN usuarios u ON u.id = h.instructor_id
             WHERE h.id = ?");
@@ -134,6 +246,7 @@ function notifyFormationChange(PDO $db, string $table, int $recordId): void
         }
         $days = [1=>'lunes',2=>'martes',3=>'miércoles',4=>'jueves',5=>'viernes',6=>'sábado',7=>'domingo'];
         $message = 'Asignatura: ' . $schedule['asignatura']
+            . "\nCompetencia: " . ($schedule['competencia'] ?: 'Sin competencia')
             . "\nDía: " . ($days[(int)$schedule['dia_semana']] ?? 'Sin día')
             . "\nHorario: " . substr($schedule['hora_inicio'], 0, 5) . ' a ' . substr($schedule['hora_fin'], 0, 5)
             . "\nAmbiente: " . $schedule['ambiente']
@@ -290,23 +403,48 @@ function sendRows(PDO $db, string $table, array $columns, ?int $id = null, ?stri
     respond($id === null ? ['data' => $rows] : ['data' => $rows[0]]);
 }
 
-function validateFichaInput(array &$data, ?array $current = null): void
+function isPositiveIntegerValue($value): bool
 {
-    $allowed = ['codigo','programa','fecha_inicio','fecha_fin'];
+    return (is_int($value) && $value > 0) ||
+        (is_string($value) && ctype_digit($value) && (int)$value > 0);
+}
+
+function validateFichaInput(PDO $db, array &$data, ?array $current = null): void
+{
+    $allowed = ['codigo','programa','programa_id','fecha_inicio','fecha_fin'];
     $unknown = array_diff(array_keys($data), $allowed);
     if ($unknown) {
         respond(['error' => 'Campos no permitidos para una ficha: ' . implode(', ', $unknown)], 422);
     }
     $values = array_merge($current ?? [], $data);
-    if ($current === null && array_diff($allowed, array_keys($data))) {
+    if ($current === null && array_diff(['codigo','fecha_inicio','fecha_fin'], array_keys($data))) {
         respond(['error' => 'Completa número, programa y fechas de la ficha.'], 422);
     }
-    if (array_key_exists('codigo', $data) && !preg_match('/^\d{7}$/', (string)$data['codigo'])) {
+    if (array_key_exists('codigo', $data) &&
+        (!is_string($data['codigo']) || !preg_match('/^\d{7}$/', $data['codigo']))) {
         respond(['error' => 'El número de ficha debe tener exactamente 7 dígitos numéricos.'], 422);
     }
-    if (array_key_exists('programa', $data) &&
-        (!is_string($data['programa']) || trim($data['programa']) === '' || mb_strlen(trim($data['programa'])) > 150)) {
-        respond(['error' => 'Escribe el nombre del programa (máximo 150 caracteres).'], 422);
+    $programId = $data['programa_id'] ?? $values['programa_id'] ?? null;
+    if (array_key_exists('programa', $data)) {
+        if (!is_string($data['programa']) || trim($data['programa']) === '' || mb_strlen(trim($data['programa'])) > 150) {
+            respond(['error' => 'Escribe el nombre del programa (máximo 150 caracteres).'], 422);
+        }
+        if (!array_key_exists('programa_id', $data)) {
+            $legacyProgram = $db->prepare("SELECT id FROM programas
+                WHERE nombre = ? AND estado = 'activo' LIMIT 1");
+            $legacyProgram->execute([trim($data['programa'])]);
+            $programId = $legacyProgram->fetchColumn();
+        }
+    }
+    if (!isPositiveIntegerValue($programId)) {
+        respond(['error' => 'Selecciona un programa académico válido y activo para la ficha.'], 422);
+    }
+    $programStmt = $db->prepare('SELECT id, nombre, estado FROM programas WHERE id = ?');
+    $programStmt->execute([(int)$programId]);
+    $program = $programStmt->fetch();
+    $sameProgram = $current !== null && (int)($current['programa_id'] ?? 0) === (int)$programId;
+    if (!$program || ($program['estado'] !== 'activo' && !$sameProgram)) {
+        respond(['error' => 'El programa seleccionado no existe o está inactivo.'], 422);
     }
     foreach (['fecha_inicio','fecha_fin'] as $field) {
         if (array_key_exists($field, $data)) {
@@ -321,11 +459,130 @@ function validateFichaInput(array &$data, ?array $current = null): void
     if ($start && $end && $start > $end) {
         respond(['error' => 'La fecha de inicio debe ser anterior o igual a la fecha de fin.'], 422);
     }
-    if (array_key_exists('programa', $data)) {
-        $data['nombre'] = trim($data['programa']);
+    if ($current === null || array_key_exists('programa_id', $data) || array_key_exists('programa', $data)) {
+        $data['programa_id'] = (int)$programId;
+        $data['programa'] = $program['nombre'];
+        $data['nombre'] = $program['nombre'];
     }
     if ($current === null) {
         $data['trimestre'] = null;
+    }
+}
+
+function validateAcademicResource(PDO $db, string $route, array &$data, ?array $current = null, ?int $id = null): void
+{
+    $definitions = [
+        'programs' => ['table'=>'programas','required'=>['codigo','nombre','nivel','duracion_trimestres','estado']],
+        'competencies' => ['table'=>'competencias','required'=>['codigo','nombre','programa_id','estado']],
+        'learning-outcomes' => ['table'=>'resultados_aprendizaje','required'=>['codigo','descripcion','competencia_id','estado']],
+        'academic-calendar' => ['table'=>'calendario_academico','required'=>['fecha','tipo','descripcion','estado']],
+    ];
+    $definition = $definitions[$route] ?? null;
+    if ($definition === null) {
+        return;
+    }
+    $values = array_merge($current ?? [], $data);
+    foreach ($definition['required'] as $field) {
+        if (!array_key_exists($field, $values) || !is_scalar($values[$field]) ||
+            trim((string)$values[$field]) === '') {
+            respond(['error' => 'Completa todos los campos obligatorios del registro académico.'], 422);
+        }
+    }
+    $lengthLimits = ['codigo'=>40,'nombre'=>$route === 'programs' ? 150 : 180,'descripcion'=>500];
+    foreach ($lengthLimits as $field => $maximum) {
+        if (array_key_exists($field, $values) &&
+            (!is_string($values[$field]) || trim($values[$field]) === '' || mb_strlen(trim($values[$field])) > $maximum)) {
+            respond(['error' => "El campo {$field} debe contener entre 1 y {$maximum} caracteres."], 422);
+        }
+        if (array_key_exists($field, $data)) {
+            $data[$field] = trim($data[$field]);
+        }
+    }
+    if (array_key_exists('codigo', $values)) {
+        $duplicate = $db->prepare("SELECT id FROM {$definition['table']} WHERE codigo = ? AND id <> ?");
+        $duplicate->execute([trim((string)$values['codigo']), $id ?? 0]);
+        if ($duplicate->fetchColumn()) {
+            respond(['error' => 'Ya existe un registro académico con ese código.'], 409);
+        }
+    }
+    if (!in_array($values['estado'] ?? null, ['activo','inactivo'], true)) {
+        respond(['error' => 'El estado debe ser activo o inactivo.'], 422);
+    }
+    if ($route === 'programs') {
+        if (!in_array($values['nivel'] ?? null, ['tecnico','tecnologo'], true) ||
+            !isPositiveIntegerValue($values['duracion_trimestres'] ?? null) ||
+            (int)$values['duracion_trimestres'] < 1 || (int)$values['duracion_trimestres'] > 65535) {
+            respond(['error' => 'El nivel debe ser técnico o tecnólogo y la duración debe ser un número positivo de trimestres.'], 422);
+        }
+        if (array_key_exists('duracion_trimestres', $data)) {
+            $data['duracion_trimestres'] = (int)$data['duracion_trimestres'];
+        }
+    }
+    if ($route === 'competencies' || $route === 'learning-outcomes') {
+        $field = $route === 'competencies' ? 'programa_id' : 'competencia_id';
+        $table = $route === 'competencies' ? 'programas' : 'competencias';
+        $foreignId = $values[$field] ?? null;
+        if (!isPositiveIntegerValue($foreignId)) {
+            respond(['error' => 'Selecciona una relación académica válida.'], 422);
+        }
+        $relationStmt = $db->prepare("SELECT id, estado FROM {$table} WHERE id = ?");
+        $relationStmt->execute([(int)$foreignId]);
+        $relation = $relationStmt->fetch();
+        $sameRelation = $current !== null && (int)($current[$field] ?? 0) === (int)$foreignId;
+        if (!$relation || ($relation['estado'] !== 'activo' && !$sameRelation)) {
+            respond(['error' => 'La relación seleccionada no existe o está inactiva.'], 422);
+        }
+        if (array_key_exists($field, $data)) {
+            $data[$field] = (int)$foreignId;
+        }
+    }
+    if ($route === 'academic-calendar') {
+        $date = (string)$values['fecha'];
+        $parsedDate = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        if (!$parsedDate || $parsedDate->format('Y-m-d') !== $date ||
+            !in_array($values['tipo'], ['festivo','vacaciones'], true) ||
+            !is_string($values['descripcion']) || trim($values['descripcion']) === '' ||
+            mb_strlen(trim($values['descripcion'])) > 250) {
+            respond(['error' => 'Indica una fecha válida, tipo festivo o vacaciones y una descripción de máximo 250 caracteres.'], 422);
+        }
+        if (isset($data['descripcion'])) {
+            $data['descripcion'] = trim($data['descripcion']);
+        }
+        $duplicate = $db->prepare('SELECT id FROM calendario_academico WHERE fecha = ? AND tipo = ? AND id <> ?');
+        $duplicate->execute([$date, $values['tipo'], $id ?? 0]);
+        if ($duplicate->fetchColumn()) {
+            respond(['error' => 'Ya existe una fecha del calendario con ese tipo.'], 409);
+        }
+    }
+}
+
+function validateScheduleCompetency(PDO $db, array $data, ?array $current = null): void
+{
+    $schedule = array_merge($current ?? [], $data);
+    if (!isPositiveIntegerValue($schedule['ficha_id'] ?? null)) {
+        respond(['error' => 'Selecciona una ficha válida para el horario.'], 422);
+    }
+    $competencyId = $schedule['competencia_id'] ?? null;
+    if ($competencyId === null || $competencyId === '') {
+        if ($current === null || array_key_exists('competencia_id', $data)) {
+            respond(['error' => 'Selecciona una competencia para el horario.'], 422);
+        }
+        return;
+    }
+    if (!isPositiveIntegerValue($competencyId)) {
+        respond(['error' => 'La competencia seleccionada no es válida.'], 422);
+    }
+    $stmt = $db->prepare("SELECT f.programa_id, c.programa_id AS competencia_programa_id, c.estado
+        FROM fichas f
+        JOIN competencias c ON c.id = ?
+        WHERE f.id = ?");
+    $stmt->execute([(int)$competencyId, (int)$schedule['ficha_id']]);
+    $relation = $stmt->fetch();
+    $sameCompetency = $current !== null && (int)($current['competencia_id'] ?? 0) === (int)$competencyId;
+    if (!$relation || $relation['programa_id'] === null ||
+        (int)$relation['programa_id'] !== (int)$relation['competencia_programa_id'] ||
+        ($relation['estado'] !== 'activo' && !$sameCompetency)) {
+        respond(['error' => 'La competencia debe estar activa y pertenecer al programa de la ficha seleccionada.'], 422);
     }
 }
 
@@ -542,15 +799,19 @@ try {
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'register' && !isset($parts[2]) && $method === 'POST') {
         $data = body();
-        foreach (['documento','nombres','apellidos','correo','password','telefono'] as $field) {
+        foreach (['tipo_documento','documento','nombres','apellidos','correo','password','telefono','pin'] as $field) {
             if (!isset($data[$field]) || !is_string($data[$field])) {
                 respond(['error' => 'Faltan datos obligatorios o tienen un formato incorrecto.'], 422);
             }
+        }
+        if (($data['acepta_tratamiento_datos'] ?? false) !== true) {
+            respond(['error' => 'Debes aceptar el tratamiento de datos personales para registrarte.'], 422);
         }
         if (isset($data['foto']) && $data['foto'] !== null && !is_string($data['foto'])) {
             respond(['error' => 'La foto del carné no tiene un formato válido.'], 422);
         }
         $registration = [
+            'tipo_documento' => trim($data['tipo_documento']),
             'documento' => trim($data['documento']),
             'nombres' => trim($data['nombres']),
             'apellidos' => trim($data['apellidos']),
@@ -559,12 +820,15 @@ try {
             'foto' => $data['foto'] ?? null,
         ];
         $password = $data['password'];
+        $pin = $data['pin'];
 
-        if ($registration['documento'] === '' || strlen($registration['documento']) > 30 ||
+        if ($registration['tipo_documento'] === '' || strlen($registration['tipo_documento']) > 20 ||
+            $registration['documento'] === '' || strlen($registration['documento']) > 30 ||
             $registration['nombres'] === '' || strlen($registration['nombres']) > 100 ||
             $registration['apellidos'] === '' || strlen($registration['apellidos']) > 100 ||
             !filter_var($registration['correo'], FILTER_VALIDATE_EMAIL) || strlen($registration['correo']) > 190 ||
-            strlen($password) < 8 || $registration['telefono'] === '' || strlen($registration['telefono']) > 30 ||
+            strlen($password) < 8 || !preg_match('/^\d{4,6}$/', $pin) ||
+            $registration['telefono'] === '' || strlen($registration['telefono']) > 30 ||
             preg_match('/[\x00-\x1F\x7F]/', $registration['documento'])) {
             respond(['error' => 'Complete los datos correctamente, incluya el teléfono y use una contraseña de al menos 8 caracteres.'], 422);
         }
@@ -625,14 +889,15 @@ try {
                 }
             }
             $passwordHash = password_hash($password, PASSWORD_DEFAULT);
-            $insert = $db->prepare('INSERT INTO usuarios (rol_id,documento,nombres,apellidos,correo,password_hash,telefono,foto,activo) VALUES (?,?,?,?,?,?,?,?,?)');
+            $insert = $db->prepare('INSERT INTO usuarios (rol_id,tipo_documento,documento,nombres,apellidos,correo,password_hash,telefono,foto,tratamiento_datos_aceptado_en,activo) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
             $insert->execute([
-                (int)$roleId, $registration['documento'], $registration['nombres'], $registration['apellidos'],
-                $registration['correo'], $passwordHash, $registration['telefono'], $registration['foto'], $student ? 1 : 0,
+                (int)$roleId, $registration['tipo_documento'], $registration['documento'], $registration['nombres'], $registration['apellidos'],
+                $registration['correo'], $passwordHash, $registration['telefono'], $registration['foto'], date('Y-m-d H:i:s'), $student ? 1 : 0,
             ]);
             $userId = (int)$db->lastInsertId();
             $qrCode = uuid4();
-            $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr) VALUES (?,?)')->execute([$userId, $qrCode]);
+            $db->prepare('INSERT INTO carnets (usuario_id,codigo_qr,pin_hash) VALUES (?,?,?)')
+                ->execute([$userId, $qrCode, password_hash($pin, PASSWORD_DEFAULT)]);
             if ($student) {
                 $db->prepare('INSERT INTO fichas_usuarios (ficha_id,usuario_id) VALUES (?,?)')->execute([$fichaId, $userId]);
                 audit($db, $userId, 'registro_publico', 'usuarios', $userId, ['rol' => $requestedRole]);
@@ -645,7 +910,7 @@ try {
             $card = [
                 'codigo_qr' => $qrCode,
                 'usuario' => [
-                    'documento' => $registration['documento'], 'nombres' => $registration['nombres'],
+                    'tipo_documento' => $registration['tipo_documento'], 'documento' => $registration['documento'], 'nombres' => $registration['nombres'],
                     'apellidos' => $registration['apellidos'], 'correo' => $registration['correo'], 'telefono' => $registration['telefono'],
                     'rol' => $requestedRole, 'foto' => $registration['foto'],
                 ],
@@ -730,23 +995,36 @@ try {
     }
     if ($route === 'auth' && ($parts[1] ?? '') === 'login' && $method === 'POST') {
         $data = body();
-        $stmt = $db->prepare('SELECT u.id, u.password_hash, u.activo FROM usuarios u
-            JOIN carnets c ON c.usuario_id = u.id AND c.qr_entregado = 0
-            WHERE u.correo = ? AND u.activo = 1
+        $identifier = trim((string)($data['identificador'] ?? $data['correo'] ?? ''));
+        $stmt = $db->prepare('SELECT u.id, u.password_hash, u.activo, c.pin_hash
+            FROM usuarios u JOIN carnets c ON c.usuario_id = u.id
+            WHERE (u.correo = ? OR u.documento = ?) AND u.activo = 1
             AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL) LIMIT 1');
-        $stmt->execute([$data['correo'] ?? '']);
+        $stmt->execute([$identifier, $identifier]);
         $record = $stmt->fetch();
         if (!$record || !password_verify((string)($data['password'] ?? ''), $record['password_hash'])) {
             respond(['error' => 'Correo o contrasena incorrectos, o usuario bloqueado.'], 401);
+        }
+        $pin = $data['pin'] ?? null;
+        if ($pin !== null && $pin !== '') {
+            if (!is_string($pin) || !preg_match('/^\d{4,6}$/', $pin)) {
+                respond(['error' => 'El PIN debe tener de 4 a 6 números.'], 422);
+            }
+            $record['pin_hash'] = password_hash($pin, PASSWORD_DEFAULT);
+            $db->prepare('UPDATE carnets SET pin_hash = ?, pin_intentos_fallidos = 0, pin_bloqueado_hasta = NULL WHERE usuario_id = ?')
+                ->execute([$record['pin_hash'], $record['id']]);
+            audit($db, (int)$record['id'], 'actualizar_pin_carnet', 'carnets', (int)$record['id']);
         }
         session_regenerate_id(true);
         $_SESSION['user_id'] = (int)$record['id'];
         $_SESSION['last_activity'] = time();
         $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$record['id']]);
         audit($db, (int)$record['id'], 'inicio_sesion_temporal', 'usuarios', (int)$record['id']);
-        respond(['data' => currentUser($db)]);
+        $account = currentUser($db);
+        $account['pin_configurado'] = $record['pin_hash'] !== null;
+        respond(['data' => $account]);
     }
-    if ($route === 'auth' && ($parts[1] ?? '') === 'qr-login' && $method === 'POST') {
+    if ($route === 'auth' && ($parts[1] ?? '') === 'qr-preview' && $method === 'POST') {
         $data = body();
         $qrCode = $data['codigo_qr'] ?? null;
         if (!is_string($qrCode) || trim($qrCode) === '' || strlen(trim($qrCode)) > 64) {
@@ -756,10 +1034,73 @@ try {
         if (!$userId) {
             respond(['error' => 'No se encontró una cuenta activa con ese carné. Revisa que la solicitud esté aprobada y que el QR no haya vencido.'], 401);
         }
+        $stmt = $db->prepare('SELECT nombres, apellidos, foto FROM usuarios WHERE id = ?');
+        $stmt->execute([$userId]);
+        respond(['data' => ['usuario' => $stmt->fetch()]]);
+    }
+    if ($route === 'auth' && ($parts[1] ?? '') === 'qr-login' && $method === 'POST') {
+        $data = body();
+        $qrCode = $data['codigo_qr'] ?? null;
+        if (!is_string($qrCode) || trim($qrCode) === '' || strlen(trim($qrCode)) > 64) {
+            respond(['error' => 'El código QR del carné no es válido.'], 422);
+        }
+        $pin = $data['pin'] ?? null;
+        if (!is_string($pin) || !preg_match('/^\d{4,6}$/', $pin)) {
+            respond(['error' => 'Ingresa el PIN de 4 a 6 números.'], 422);
+        }
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare('SELECT c.usuario_id, c.pin_hash, c.pin_intentos_fallidos,
+                    c.pin_bloqueado_hasta, c.pin_bloqueado_hasta > NOW() AS bloqueado
+                FROM carnets c JOIN usuarios u ON u.id = c.usuario_id AND u.activo = 1
+                WHERE c.codigo_qr = ? AND (c.vence_en IS NULL OR c.vence_en >= CURDATE())
+                    AND NOT EXISTS (SELECT 1 FROM bloqueos b WHERE b.usuario_id = u.id AND b.desbloqueado_en IS NULL)
+                LIMIT 1 FOR UPDATE');
+            $stmt->execute([trim($qrCode)]);
+            $record = $stmt->fetch();
+            if (!$record) {
+                $db->commit();
+                respond(['error' => 'No se pudo validar el carné o el PIN.'], 401);
+            }
+            $userId = (int)$record['usuario_id'];
+            if ($record['bloqueado']) {
+                $db->commit();
+                respond(['error' => 'Acceso con carné bloqueado temporalmente. Intenta de nuevo más tarde.'], 429);
+            }
+            if ($record['pin_hash'] === null) {
+                $db->commit();
+                respond(['error' => 'Este carné aún no tiene PIN configurado. Ingresa con documento o correo y contraseña.'], 401);
+            }
+            $settings = systemSettings($db);
+            $maximumAttempts = $settings['pin_intentos_maximos'] ?? null;
+            $lockMinutes = $settings['pin_bloqueo_minutos'] ?? null;
+            if (!is_int($maximumAttempts) || !is_int($lockMinutes)) {
+                throw new RuntimeException('Falta la configuración de intentos de PIN del carné.');
+            }
+            $attempts = $record['pin_bloqueado_hasta'] !== null ? 0 : (int)$record['pin_intentos_fallidos'];
+            if (!password_verify($pin, $record['pin_hash'])) {
+                $attempts++;
+                $db->prepare('UPDATE carnets SET pin_intentos_fallidos = ?, pin_bloqueado_hasta = IF(?, DATE_ADD(NOW(), INTERVAL ' . $lockMinutes . ' MINUTE), NULL) WHERE usuario_id = ?')
+                    ->execute([$attempts, $attempts >= $maximumAttempts ? 1 : 0, $userId]);
+                $db->commit();
+                respond([
+                    'error' => $attempts >= $maximumAttempts
+                        ? "PIN incorrecto. El acceso con carné quedó bloqueado durante {$lockMinutes} minutos."
+                        : 'PIN incorrecto. Verifica el número e inténtalo de nuevo.',
+                ], $attempts >= $maximumAttempts ? 429 : 401);
+            }
+            $db->prepare('UPDATE carnets SET pin_intentos_fallidos = 0, pin_bloqueado_hasta = NULL WHERE usuario_id = ?')->execute([$userId]);
+            $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
+            $db->commit();
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $exception;
+        }
         session_regenerate_id(true);
         $_SESSION['user_id'] = (int)$userId;
         $_SESSION['last_activity'] = time();
-        $db->prepare('UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ?')->execute([$userId]);
         $db->prepare('UPDATE carnets SET qr_entregado = 1 WHERE usuario_id = ?')->execute([$userId]);
         audit($db, (int)$userId, 'inicio_sesion_codigo_qr', 'usuarios', (int)$userId);
         respond(['data' => currentUser($db)]);
@@ -827,6 +1168,650 @@ try {
     if ($route === 'auth' && ($parts[1] ?? '') === 'me' && $method === 'GET') {
         respond(['data' => requireRoles($user, ['administrador','instructor','estudiante','portero'])]);
     }
+    if ($route === 'excuses' && isset($parts[1], $parts[2]) &&
+        ctype_digit($parts[1]) && $parts[2] === 'review' && $method === 'POST') {
+        $reviewer = requireRoles($user, ['administrador','instructor']);
+        $data = body();
+        if (!in_array($data['estado'] ?? null, ['aprobada','rechazada'], true)) {
+            respond(['error' => 'La revisión debe ser aprobada o rechazada.'], 422);
+        }
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare("SELECT n.id, n.usuario_id, n.asistencia_id, n.estado_excusa,
+                    a.ficha_id, a.estado AS estado_asistencia, a.fecha
+                FROM novedades n JOIN asistencias a ON a.id = n.asistencia_id
+                WHERE n.id = ? AND n.tipo = 'inasistencia' FOR UPDATE");
+            $stmt->execute([(int)$parts[1]]);
+            $excuse = $stmt->fetch();
+            if (!$excuse || $excuse['estado_excusa'] !== 'pendiente') {
+                $db->rollBack();
+                respond(['error' => 'No existe una excusa pendiente para revisar.'], 404);
+            }
+            if ($reviewer['rol'] === 'instructor') {
+                $assignment = $db->prepare('SELECT 1 FROM fichas_instructores WHERE ficha_id = ? AND instructor_id = ?');
+                $assignment->execute([(int)$excuse['ficha_id'], (int)$reviewer['id']]);
+                if (!$assignment->fetchColumn()) {
+                    $db->rollBack();
+                    respond(['error' => 'Solo puedes revisar excusas de tus fichas asignadas.'], 403);
+                }
+            }
+            $db->prepare('UPDATE novedades SET estado_excusa = ?, revisado_por = ?, revisado_en = NOW() WHERE id = ?')
+                ->execute([$data['estado'], (int)$reviewer['id'], (int)$excuse['id']]);
+            if ($data['estado'] === 'aprobada') {
+                $db->prepare("UPDATE asistencias SET estado = 'permiso', registrado_por = ? WHERE id = ?")
+                    ->execute([(int)$reviewer['id'], (int)$excuse['asistencia_id']]);
+            }
+            $status = $data['estado'] === 'aprobada' ? 'aprobada' : 'rechazada';
+            $message = $status === 'aprobada'
+                ? 'La excusa para la falta del ' . $excuse['fecha'] . ' fue aprobada; tu asistencia se actualizó a permiso.'
+                : 'La excusa para la falta del ' . $excuse['fecha'] . ' fue rechazada.';
+            notifyUsers($db, [(int)$excuse['usuario_id']], 'Excusa ' . $status, $message, 'excusa', (int)$reviewer['id']);
+            audit($db, (int)$reviewer['id'], 'revisar_excusa', 'novedades', (int)$excuse['id'], ['estado'=>$status]);
+            $db->commit();
+            respond(['data' => ['estado'=>$status]]);
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $exception;
+        }
+    }
+    if ($route === 'excuses' && $method === 'GET' && !isset($parts[1])) {
+        $reviewer = requireRoles($user, ['administrador','instructor']);
+        $sql = "SELECT n.id, n.asistencia_id, n.usuario_id, n.descripcion, n.fecha,
+                n.estado_excusa, n.revisado_en, n.soporte_ruta, a.fecha AS fecha_asistencia,
+                f.codigo AS ficha_codigo, f.nombre AS ficha_nombre,
+                CONCAT(s.nombres, ' ', s.apellidos) AS estudiante
+            FROM novedades n
+            JOIN asistencias a ON a.id = n.asistencia_id
+            JOIN fichas f ON f.id = a.ficha_id
+            JOIN usuarios s ON s.id = n.usuario_id
+            WHERE n.tipo = 'inasistencia' AND n.estado_excusa IS NOT NULL";
+        $params = [];
+        if ($reviewer['rol'] === 'instructor') {
+            $sql .= ' AND EXISTS (SELECT 1 FROM fichas_instructores fi
+                WHERE fi.ficha_id = a.ficha_id AND fi.instructor_id = ?)';
+            $params[] = (int)$reviewer['id'];
+        }
+        $sql .= " ORDER BY FIELD(n.estado_excusa, 'pendiente', 'aprobada', 'rechazada'), n.fecha DESC LIMIT 500";
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        respond(['data' => $stmt->fetchAll()]);
+    }
+    if ($route === 'excuses' && isset($parts[1], $parts[2]) &&
+        ctype_digit($parts[1]) && $parts[2] === 'file' && $method === 'GET') {
+        $reviewer = requireRoles($user, ['administrador','instructor']);
+        $sql = "SELECT n.soporte_ruta FROM novedades n
+            JOIN asistencias a ON a.id = n.asistencia_id
+            WHERE n.id = ? AND n.tipo = 'inasistencia' AND n.soporte_ruta IS NOT NULL";
+        $params = [(int)$parts[1]];
+        if ($reviewer['rol'] === 'instructor') {
+            $sql .= ' AND EXISTS (SELECT 1 FROM fichas_instructores fi
+                WHERE fi.ficha_id = a.ficha_id AND fi.instructor_id = ?)';
+            $params[] = (int)$reviewer['id'];
+        }
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $fileName = $stmt->fetchColumn();
+        if (!$fileName) {
+            respond(['error' => 'No se encontró un soporte de una excusa autorizada.'], 404);
+        }
+        $path = __DIR__ . '/uploads/excuses/' . basename((string)$fileName);
+        if (!is_file($path) || !is_readable($path)) {
+            respond(['error' => 'El archivo de soporte no está disponible.'], 404);
+        }
+        $mimeInfo = finfo_open(FILEINFO_MIME_TYPE);
+        if ($mimeInfo === false) {
+            throw new RuntimeException('No se pudo validar el archivo de soporte.');
+        }
+        try {
+            $mime = finfo_file($mimeInfo, $path);
+        } finally {
+            finfo_close($mimeInfo);
+        }
+        $safeExtensions = ['application/pdf'=>'pdf','image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
+        if (!isset($safeExtensions[$mime])) {
+            respond(['error' => 'El archivo de soporte tiene un formato no permitido.'], 415);
+        }
+        header('Content-Type: ' . $mime);
+        header('Content-Length: ' . filesize($path));
+        header('Content-Disposition: inline; filename="soporte-excusa.' . $safeExtensions[$mime] . '"');
+        header('X-Content-Type-Options: nosniff');
+        readfile($path);
+        exit;
+    }
+    if ($route === 'evaluations') {
+        $evaluator = requireRoles($user, ['administrador','instructor']);
+        if ($method === 'GET') {
+            $sql = "SELECT j.id, j.estudiante_id, CONCAT(s.nombres, ' ', s.apellidos) AS estudiante,
+                    r.id AS resultado_id, r.codigo AS resultado_codigo, r.descripcion AS resultado,
+                    c.nombre AS competencia, p.nombre AS programa, j.juicio, j.evaluado_en,
+                    CONCAT(e.nombres, ' ', e.apellidos) AS evaluador
+                FROM juicios_resultados j
+                JOIN usuarios s ON s.id = j.estudiante_id
+                JOIN resultados_aprendizaje r ON r.id = j.resultado_id
+                JOIN competencias c ON c.id = r.competencia_id
+                JOIN programas p ON p.id = c.programa_id
+                JOIN usuarios e ON e.id = j.evaluado_por";
+            $params = [];
+            if ($evaluator['rol'] === 'instructor') {
+                $sql .= " WHERE EXISTS (
+                    SELECT 1 FROM fichas_usuarios fu
+                    JOIN fichas f ON f.id = fu.ficha_id
+                    JOIN fichas_instructores fi ON fi.ficha_id = f.id AND fi.instructor_id = ?
+                    WHERE fu.usuario_id = j.estudiante_id AND f.programa_id = p.id
+                )";
+                $params[] = (int)$evaluator['id'];
+            }
+            $sql .= ' ORDER BY j.evaluado_en DESC, j.id DESC LIMIT 1000';
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            respond(['data' => $stmt->fetchAll()]);
+        }
+        if ($method === 'POST') {
+            $data = body();
+            $studentId = $data['estudiante_id'] ?? null;
+            $resultId = $data['resultado_id'] ?? null;
+            if (!isPositiveIntegerValue($studentId) || !isPositiveIntegerValue($resultId) ||
+                !in_array($data['juicio'] ?? null, ['aprobado','no_aprobado','por_evaluar'], true)) {
+                respond(['error' => 'Selecciona un aprendiz, resultado y juicio evaluativo válidos.'], 422);
+            }
+            $eligible = $db->prepare("SELECT 1 FROM usuarios s
+                JOIN roles ro ON ro.id = s.rol_id AND ro.nombre = 'estudiante' AND s.activo = 1
+                JOIN fichas_usuarios fu ON fu.usuario_id = s.id
+                JOIN fichas f ON f.id = fu.ficha_id
+                JOIN resultados_aprendizaje r ON r.id = ?
+                JOIN competencias c ON c.id = r.competencia_id AND c.programa_id = f.programa_id
+                WHERE s.id = ?" . ($evaluator['rol'] === 'instructor'
+                    ? ' AND EXISTS (SELECT 1 FROM fichas_instructores fi WHERE fi.ficha_id = f.id AND fi.instructor_id = ?)'
+                    : '') . ' LIMIT 1');
+            $params = [(int)$resultId, (int)$studentId];
+            if ($evaluator['rol'] === 'instructor') {
+                $params[] = (int)$evaluator['id'];
+            }
+            $eligible->execute($params);
+            if (!$eligible->fetchColumn()) {
+                respond(['error' => 'El aprendiz debe estar inscrito en el programa del resultado y ser de una ficha asignada al evaluador.'], 403);
+            }
+            $db->beginTransaction();
+            try {
+                $db->prepare('INSERT INTO juicios_resultados (estudiante_id, resultado_id, juicio, evaluado_por) VALUES (?, ?, ?, ?)')
+                    ->execute([(int)$studentId, (int)$resultId, $data['juicio'], (int)$evaluator['id']]);
+                $evaluationId = (int)$db->lastInsertId();
+                $result = $db->prepare('SELECT codigo FROM resultados_aprendizaje WHERE id = ?');
+                $result->execute([(int)$resultId]);
+                notifyUsers($db, [(int)$studentId], 'Actualización de formación',
+                    'Se registró el juicio ' . str_replace('_', ' ', $data['juicio']) .
+                    ' para el resultado de aprendizaje ' . (string)$result->fetchColumn() . '.',
+                    'formacion', (int)$evaluator['id']);
+                audit($db, (int)$evaluator['id'], 'registrar_juicio', 'juicios_resultados', $evaluationId,
+                    ['estudiante_id'=>(int)$studentId, 'resultado_id'=>(int)$resultId, 'juicio'=>$data['juicio']]);
+                $db->commit();
+            } catch (Throwable $exception) {
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
+                throw $exception;
+            }
+            respond(['data' => ['id'=>$evaluationId]], 201);
+        }
+        respond(['error' => 'Método no permitido para juicios evaluativos.'], 405);
+    }
+    if ($route === 'learner') {
+        $student = requireRoles($user, ['estudiante']);
+        $studentId = (int)$student['id'];
+        $section = $parts[1] ?? '';
+        $validLearnerRoute = match ($section) {
+            'dashboard', 'schedule', 'attendance', 'profile' => count($parts) === 2,
+            'excuses' => count($parts) === 2 ||
+                count($parts) === 4 && ctype_digit($parts[2]) && $parts[3] === 'file',
+            'notifications' => count($parts) === 2 ||
+                count($parts) === 3 && $parts[2] === 'read-all' ||
+                count($parts) === 4 && ctype_digit($parts[2]) && $parts[3] === 'read',
+            'formation' => count($parts) === 2 || count($parts) === 3 && $parts[2] === 'pdf',
+            default => false,
+        };
+        if (!$validLearnerRoute) {
+            respond(['error' => 'Ruta del portal aprendiz no encontrada.'], 404);
+        }
+
+        if ($section === 'dashboard' && $method === 'GET') {
+            $identity = $db->prepare("SELECT u.nombres, u.apellidos, f.codigo AS ficha_codigo,
+                    COALESCE(p.nombre, f.programa) AS programa, f.trimestre
+                FROM usuarios u
+                LEFT JOIN fichas_usuarios fu ON fu.usuario_id = u.id
+                LEFT JOIN fichas f ON f.id = fu.ficha_id
+                LEFT JOIN programas p ON p.id = f.programa_id
+                WHERE u.id = ?
+                ORDER BY (f.fecha_inicio <= CURRENT_DATE() AND f.fecha_fin >= CURRENT_DATE()) DESC,
+                    f.fecha_inicio DESC, f.id DESC LIMIT 1");
+            $identity->execute([$studentId]);
+            $profile = $identity->fetch();
+            $summaryStmt = $db->prepare("SELECT COUNT(*) AS total,
+                    COALESCE(SUM(estado = 'presente'), 0) AS presentes,
+                    COALESCE(SUM(estado = 'ausente'), 0) AS ausencias,
+                    COALESCE(SUM(estado = 'tarde'), 0) AS retrasos,
+                    COALESCE(SUM(estado = 'permiso'), 0) AS permisos
+                FROM asistencias WHERE usuario_id = ?");
+            $summaryStmt->execute([$studentId]);
+            $summary = $summaryStmt->fetch();
+            $denominator = (int)$summary['total'] - (int)$summary['permisos'];
+            $attended = (int)$summary['presentes'] + (int)$summary['retrasos'];
+            $percentage = $denominator > 0 ? (int)round(100 * $attended / $denominator) : 0;
+            $settings = systemSettings($db);
+            $alert = $denominator === 0 || $percentage >= ($settings['asistencia_alerta_amarilla'] ?? 90)
+                ? null
+                : [
+                    'nivel' => $percentage < ($settings['asistencia_alerta_roja'] ?? 80) ? 'roja' : 'amarilla',
+                    'porcentaje' => $percentage,
+                    'amarilla' => $settings['asistencia_alerta_amarilla'] ?? 90,
+                    'roja' => $settings['asistencia_alerta_roja'] ?? 80,
+                ];
+            $unread = $db->prepare('SELECT COUNT(*) FROM notificaciones WHERE usuario_id = ? AND leida_en IS NULL');
+            $unread->execute([$studentId]);
+            $classes = $db->prepare("SELECT h.dia_semana, h.hora_inicio, h.hora_fin, h.asignatura,
+                    c.nombre AS competencia, a.nombre AS ambiente,
+                    CONCAT(i.nombres, ' ', i.apellidos) AS instructor,
+                    f.codigo AS ficha_codigo, COALESCE(p.nombre, f.programa) AS programa, f.trimestre
+                FROM fichas_usuarios fu
+                JOIN fichas f ON f.id = fu.ficha_id
+                JOIN horarios h ON h.ficha_id = f.id AND h.dia_semana = WEEKDAY(CURRENT_DATE()) + 1
+                LEFT JOIN competencias c ON c.id = h.competencia_id
+                JOIN ambientes a ON a.id = h.ambiente_id
+                JOIN usuarios i ON i.id = h.instructor_id
+                LEFT JOIN programas p ON p.id = f.programa_id
+                WHERE fu.usuario_id = ? AND f.estado = 'activa'
+                ORDER BY h.hora_inicio, f.codigo");
+            $classes->execute([$studentId]);
+            $summary['total'] = (int)$summary['total'];
+            foreach (['presentes','ausencias','retrasos','permisos'] as $field) {
+                $summary[$field] = (int)$summary[$field];
+            }
+            respond(['data' => [
+                'aprendiz' => $profile,
+                'asistencia' => ['porcentaje'=>$percentage, 'alerta'=>$alert] + $summary,
+                'notificaciones_sin_leer' => (int)$unread->fetchColumn(),
+                'clases_hoy' => $classes->fetchAll(),
+            ]]);
+        }
+        if ($section === 'schedule' && $method === 'GET') {
+            $view = $_GET['view'] ?? 'week';
+            if (!in_array($view, ['day','week'], true)) {
+                respond(['error' => 'La vista del horario debe ser day o week.'], 422);
+            }
+            $date = (string)($_GET['date'] ?? date('Y-m-d'));
+            $parsedDate = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+            if (!$parsedDate || $parsedDate->format('Y-m-d') !== $date) {
+                respond(['error' => 'La fecha debe usar el formato YYYY-MM-DD.'], 422);
+            }
+            $sql = "SELECT h.dia_semana, h.hora_inicio, h.hora_fin, h.asignatura,
+                    c.nombre AS competencia, a.nombre AS ambiente,
+                    CONCAT(i.nombres, ' ', i.apellidos) AS instructor,
+                    f.codigo AS ficha_codigo, f.nombre AS ficha_nombre,
+                    COALESCE(p.nombre, f.programa) AS programa, f.trimestre
+                FROM fichas_usuarios fu
+                JOIN fichas f ON f.id = fu.ficha_id
+                JOIN horarios h ON h.ficha_id = f.id
+                LEFT JOIN competencias c ON c.id = h.competencia_id
+                JOIN ambientes a ON a.id = h.ambiente_id
+                JOIN usuarios i ON i.id = h.instructor_id
+                LEFT JOIN programas p ON p.id = f.programa_id
+                WHERE fu.usuario_id = ? AND f.estado = 'activa'";
+            $params = [$studentId];
+            if ($view === 'day') {
+                $sql .= ' AND h.dia_semana = WEEKDAY(?) + 1';
+                $params[] = $date;
+            }
+            $sql .= ' ORDER BY h.dia_semana, h.hora_inicio, f.codigo';
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            respond(['data' => ['fecha'=>$date, 'vista'=>$view, 'clases'=>$stmt->fetchAll()]]);
+        }
+        if ($section === 'attendance' && $method === 'GET') {
+            $stmt = $db->prepare("SELECT a.id, a.fecha, a.estado, a.observacion,
+                    h.asignatura, c.nombre AS competencia, h.hora_inicio, h.hora_fin,
+                    amb.nombre AS ambiente, CONCAT(i.nombres, ' ', i.apellidos) AS instructor,
+                    f.codigo AS ficha_codigo, f.nombre AS ficha_nombre,
+                    COALESCE(p.nombre, f.programa) AS programa, f.trimestre,
+                    n.id AS excusa_id, n.estado_excusa, n.descripcion AS excusa_descripcion,
+                    n.soporte_ruta
+                FROM asistencias a
+                JOIN fichas f ON f.id = a.ficha_id
+                LEFT JOIN horarios h ON h.id = a.horario_id
+                LEFT JOIN competencias c ON c.id = h.competencia_id
+                LEFT JOIN ambientes amb ON amb.id = h.ambiente_id
+                LEFT JOIN usuarios i ON i.id = h.instructor_id
+                LEFT JOIN programas p ON p.id = f.programa_id
+                LEFT JOIN novedades n ON n.id = (
+                    SELECT n2.id FROM novedades n2
+                    WHERE n2.asistencia_id = a.id AND n2.usuario_id = a.usuario_id AND n2.tipo = 'inasistencia'
+                    ORDER BY n2.id DESC LIMIT 1
+                )
+                WHERE a.usuario_id = ?
+                ORDER BY a.fecha DESC, h.hora_inicio DESC, a.id DESC LIMIT 1000");
+            $stmt->execute([$studentId]);
+            respond(['data' => $stmt->fetchAll()]);
+        }
+        if ($section === 'excuses' && $method === 'GET' && !isset($parts[2])) {
+            $stmt = $db->prepare("SELECT n.id, n.asistencia_id, n.descripcion, n.fecha,
+                    n.estado_excusa, n.soporte_ruta, n.revisado_en,
+                    a.estado AS estado_asistencia, a.fecha AS fecha_asistencia
+                FROM novedades n
+                LEFT JOIN asistencias a ON a.id = n.asistencia_id
+                WHERE n.usuario_id = ? AND n.tipo = 'inasistencia'
+                ORDER BY n.fecha DESC, n.id DESC LIMIT 500");
+            $stmt->execute([$studentId]);
+            respond(['data' => $stmt->fetchAll()]);
+        }
+        if ($section === 'excuses' && $method === 'POST' && !isset($parts[2])) {
+            $attendanceId = $_POST['asistencia_id'] ?? '';
+            $description = trim((string)($_POST['descripcion'] ?? ''));
+            if (!isPositiveIntegerValue($attendanceId) || $description === '' || mb_strlen($description) > 500) {
+                respond(['error' => 'Selecciona una falta y escribe el motivo (máximo 500 caracteres).'], 422);
+            }
+            $file = $_FILES['soporte'] ?? null;
+            if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK ||
+                !is_uploaded_file((string)($file['tmp_name'] ?? '')) ||
+                (int)($file['size'] ?? 0) < 1 || (int)$file['size'] > 5242880) {
+                respond(['error' => 'Adjunta un soporte PDF o una imagen JPG, PNG o WEBP de máximo 5 MB.'], 422);
+            }
+            $fileInfo = finfo_open(FILEINFO_MIME_TYPE);
+            if ($fileInfo === false) {
+                throw new RuntimeException('No se pudo validar el soporte de la excusa.');
+            }
+            try {
+                $mime = finfo_file($fileInfo, (string)$file['tmp_name']);
+            } finally {
+                finfo_close($fileInfo);
+            }
+            $extensions = ['application/pdf'=>'pdf','image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
+            if (!isset($extensions[$mime])) {
+                respond(['error' => 'El archivo debe ser un PDF, JPG, PNG o WEBP válido.'], 422);
+            }
+            $db->beginTransaction();
+            $storedPath = null;
+            try {
+                $attendanceStmt = $db->prepare("SELECT id, usuario_id, fecha, estado
+                    FROM asistencias WHERE id = ? AND usuario_id = ? FOR UPDATE");
+                $attendanceStmt->execute([(int)$attendanceId, $studentId]);
+                $attendance = $attendanceStmt->fetch();
+                if (!$attendance) {
+                    $db->rollBack();
+                    respond(['error' => 'No se encontró una falta propia para presentar la excusa.'], 404);
+                }
+                if ($attendance['estado'] !== 'ausente') {
+                    $db->rollBack();
+                    respond(['error' => 'Solo puedes presentar excusa para una falta que todavía figure como ausente.'], 409);
+                }
+                $elapsed = businessDaysSince($db, (string)$attendance['fecha']);
+                $deadline = systemSettings($db)['dias_habiles_excusa'] ?? 3;
+                if ($elapsed === null || $elapsed > $deadline) {
+                    $db->rollBack();
+                    respond(['error' => "El plazo de {$deadline} días hábiles para presentar esta excusa ya venció."], 409);
+                }
+                $existing = $db->prepare("SELECT id FROM novedades
+                    WHERE asistencia_id = ? AND tipo = 'inasistencia'
+                        AND estado_excusa IN ('pendiente','aprobada') LIMIT 1");
+                $existing->execute([(int)$attendanceId]);
+                if ($existing->fetchColumn()) {
+                    $db->rollBack();
+                    respond(['error' => 'Esta falta ya tiene una excusa pendiente o aprobada.'], 409);
+                }
+                $directory = __DIR__ . '/uploads/excuses';
+                if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
+                    throw new RuntimeException('No se pudo preparar el almacenamiento seguro de soportes.');
+                }
+                $storedName = bin2hex(random_bytes(24)) . '.' . $extensions[$mime];
+                $storedPath = $directory . DIRECTORY_SEPARATOR . $storedName;
+                if (!move_uploaded_file((string)$file['tmp_name'], $storedPath)) {
+                    throw new RuntimeException('No se pudo guardar el soporte de la excusa.');
+                }
+                $db->prepare("INSERT INTO novedades
+                    (usuario_id, asistencia_id, tipo, descripcion, estado_excusa, soporte_ruta, fecha, registrado_por)
+                    VALUES (?, ?, 'inasistencia', ?, 'pendiente', ?, ?, ?)")
+                    ->execute([$studentId, (int)$attendanceId, $description, $storedName, $attendance['fecha'], $studentId]);
+                $excuseId = (int)$db->lastInsertId();
+                $reviewers = $db->prepare("SELECT u.id FROM usuarios u JOIN roles r ON r.id = u.rol_id
+                    WHERE u.activo = 1 AND r.nombre = 'administrador'
+                    UNION
+                    SELECT fi.instructor_id FROM fichas_instructores fi
+                    JOIN asistencias a ON a.ficha_id = fi.ficha_id
+                    WHERE a.id = ?");
+                $reviewers->execute([(int)$attendanceId]);
+                notifyUsers($db, $reviewers->fetchAll(PDO::FETCH_COLUMN),
+                    'Nueva excusa pendiente', 'El aprendiz presentó una excusa para una falta del ' .
+                    (string)$attendance['fecha'] . '.', 'excusa', $studentId);
+                audit($db, $studentId, 'presentar_excusa', 'novedades', $excuseId);
+                $db->commit();
+            } catch (Throwable $exception) {
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
+                if (is_string($storedPath) && is_file($storedPath) && !unlink($storedPath)) {
+                    error_log('[gestion-institucional] Could not remove orphaned excuse support file.');
+                }
+                throw $exception;
+            }
+            respond(['data' => ['id'=>$excuseId, 'estado'=>'pendiente']], 201);
+        }
+        if ($section === 'excuses' && isset($parts[2], $parts[3]) &&
+            $parts[3] === 'file' && $method === 'GET' && ctype_digit($parts[2])) {
+            $stmt = $db->prepare("SELECT soporte_ruta FROM novedades
+                WHERE id = ? AND usuario_id = ? AND tipo = 'inasistencia' AND soporte_ruta IS NOT NULL");
+            $stmt->execute([(int)$parts[2], $studentId]);
+            $fileName = $stmt->fetchColumn();
+            if (!$fileName) {
+                respond(['error' => 'No se encontró el soporte de una excusa propia.'], 404);
+            }
+            $path = __DIR__ . '/uploads/excuses/' . basename((string)$fileName);
+            if (!is_file($path) || !is_readable($path)) {
+                respond(['error' => 'El archivo de soporte no está disponible.'], 404);
+            }
+            $mimeInfo = finfo_open(FILEINFO_MIME_TYPE);
+            if ($mimeInfo === false) {
+                throw new RuntimeException('No se pudo validar el archivo de soporte.');
+            }
+            try {
+                $mime = finfo_file($mimeInfo, $path);
+            } finally {
+                finfo_close($mimeInfo);
+            }
+            $safeExtensions = ['application/pdf'=>'pdf','image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
+            if (!isset($safeExtensions[$mime])) {
+                respond(['error' => 'El archivo de soporte tiene un formato no permitido.'], 415);
+            }
+            header('Content-Type: ' . $mime);
+            header('Content-Length: ' . filesize($path));
+            header('Content-Disposition: inline; filename="soporte-excusa.' . $safeExtensions[$mime] . '"');
+            header('X-Content-Type-Options: nosniff');
+            readfile($path);
+            exit;
+        }
+        if ($section === 'notifications' && $method === 'GET') {
+            $stmt = $db->prepare("SELECT n.id, n.titulo, n.mensaje, n.leida_en, n.creado_en,
+                    COALESCE(n.tipo,
+                        CASE WHEN n.titulo LIKE 'Actualización de asistencia%' THEN 'asistencia'
+                            WHEN n.titulo LIKE '%excusa%' THEN 'excusa'
+                            WHEN n.titulo LIKE '%formación%' OR n.titulo LIKE '%competencia%' THEN 'formacion'
+                            ELSE 'sistema' END) AS tipo,
+                    COALESCE(CONCAT(s.nombres, ' ', s.apellidos), 'Sistema') AS remitente
+                FROM notificaciones n LEFT JOIN usuarios s ON s.id = n.remitente_id
+                WHERE n.usuario_id = ? ORDER BY n.creado_en DESC, n.id DESC LIMIT 500");
+            $stmt->execute([$studentId]);
+            respond(['data' => $stmt->fetchAll()]);
+        }
+        if ($section === 'notifications' && isset($parts[2], $parts[3]) &&
+            $parts[3] === 'read' && ctype_digit($parts[2]) && $method === 'PATCH') {
+            $stmt = $db->prepare('UPDATE notificaciones SET leida_en = COALESCE(leida_en, NOW()) WHERE id = ? AND usuario_id = ?');
+            $stmt->execute([(int)$parts[2], $studentId]);
+            if (!$stmt->rowCount()) {
+                $exists = $db->prepare('SELECT 1 FROM notificaciones WHERE id = ? AND usuario_id = ?');
+                $exists->execute([(int)$parts[2], $studentId]);
+                if (!$exists->fetchColumn()) {
+                    respond(['error' => 'No se encontró esa notificación.'], 404);
+                }
+            }
+            respond(['data' => ['leida'=>true]]);
+        }
+        if ($section === 'notifications' && ($parts[2] ?? '') === 'read-all' && $method === 'POST') {
+            $db->prepare('UPDATE notificaciones SET leida_en = NOW() WHERE usuario_id = ? AND leida_en IS NULL')
+                ->execute([$studentId]);
+            respond(['data' => ['leidas'=>$db->query('SELECT ROW_COUNT()')->fetchColumn()]]);
+        }
+        if ($section === 'profile' && $method === 'GET') {
+            $stmt = $db->prepare('SELECT correo, telefono FROM usuarios WHERE id = ?');
+            $stmt->execute([$studentId]);
+            respond(['data' => $stmt->fetch()]);
+        }
+        if ($section === 'profile' && $method === 'PATCH') {
+            $data = body();
+            $allowed = ['correo','telefono','password','pin','current_password'];
+            if (!$data || array_diff(array_keys($data), $allowed) ||
+                !array_intersect(array_keys($data), ['correo','telefono','password','pin'])) {
+                respond(['error' => 'Solo puedes cambiar correo, celular, contraseña o PIN.'], 422);
+            }
+            $updates = [];
+            $pinHash = null;
+            if (array_key_exists('correo', $data)) {
+                if (!is_string($data['correo']) || !filter_var(trim($data['correo']), FILTER_VALIDATE_EMAIL) ||
+                    strlen(trim($data['correo'])) > 190) {
+                    respond(['error' => 'Ingresa un correo electrónico válido de máximo 190 caracteres.'], 422);
+                }
+                $duplicate = $db->prepare('SELECT 1 FROM usuarios WHERE correo = ? AND id <> ?');
+                $duplicate->execute([trim($data['correo']), $studentId]);
+                if ($duplicate->fetchColumn()) {
+                    respond(['error' => 'Ese correo ya está asociado a otra cuenta.'], 409);
+                }
+                $updates['correo'] = trim($data['correo']);
+            }
+            if (array_key_exists('telefono', $data)) {
+                if (!is_string($data['telefono']) || mb_strlen(trim($data['telefono'])) > 30) {
+                    respond(['error' => 'El celular debe tener máximo 30 caracteres.'], 422);
+                }
+                $updates['telefono'] = trim($data['telefono']) ?: null;
+            }
+            if (array_key_exists('password', $data)) {
+                if (!is_string($data['password']) || strlen($data['password']) < 8) {
+                    respond(['error' => 'La contraseña debe tener al menos 8 caracteres.'], 422);
+                }
+                $updates['password_hash'] = password_hash($data['password'], PASSWORD_DEFAULT);
+            }
+            if (array_key_exists('pin', $data)) {
+                if (!is_string($data['pin']) || !preg_match('/^\d{4,6}$/', $data['pin'])) {
+                    respond(['error' => 'El PIN debe tener de 4 a 6 números.'], 422);
+                }
+                $pinHash = password_hash($data['pin'], PASSWORD_DEFAULT);
+            }
+            if (isset($updates['password_hash']) || $pinHash !== null) {
+                $confirmation = $data['current_password'] ?? null;
+                $passwordStmt = $db->prepare('SELECT password_hash FROM usuarios WHERE id = ?');
+                $passwordStmt->execute([$studentId]);
+                if (!is_string($confirmation) || !password_verify($confirmation, (string)$passwordStmt->fetchColumn())) {
+                    respond(['error' => 'Confirma tu contraseña actual para cambiar credenciales.'], 403);
+                }
+            }
+            if (!$updates && $pinHash === null) {
+                respond(['error' => 'No hay cambios para guardar.'], 422);
+            }
+            $db->beginTransaction();
+            try {
+                $fields = array_keys($updates);
+                if ($fields) {
+                    $assignments = implode(', ', array_map(static fn($field) => "{$field} = ?", $fields));
+                    $db->prepare("UPDATE usuarios SET {$assignments} WHERE id = ?")
+                        ->execute([...array_values($updates), $studentId]);
+                }
+                if ($pinHash !== null) {
+                    $cardUpdate = $db->prepare('UPDATE carnets SET pin_hash = ?, pin_intentos_fallidos = 0, pin_bloqueado_hasta = NULL WHERE usuario_id = ?');
+                    $cardUpdate->execute([$pinHash, $studentId]);
+                    if (!$cardUpdate->rowCount()) {
+                        $card = $db->prepare('SELECT 1 FROM carnets WHERE usuario_id = ?');
+                        $card->execute([$studentId]);
+                        if (!$card->fetchColumn()) {
+                            throw new RuntimeException('No se encontró un carné al cual asociar el nuevo PIN.');
+                        }
+                    }
+                }
+                audit($db, $studentId, 'actualizar_perfil_aprendiz', 'usuarios', $studentId,
+                    ['campos'=>array_values(array_merge(
+                        array_diff($fields, ['password_hash']),
+                        $pinHash !== null ? ['pin'] : []
+                    ))]);
+                $db->commit();
+            } catch (Throwable $exception) {
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
+                throw $exception;
+            }
+            respond(['data' => ['message'=>'Perfil actualizado.']]);
+        }
+        if ($section === 'formation' && $method === 'GET' && !isset($parts[2])) {
+            $stmt = $db->prepare("SELECT p.id AS programa_id, p.codigo AS programa_codigo,
+                    p.nombre AS programa, f.codigo AS ficha_codigo, f.trimestre,
+                    c.id AS competencia_id, c.codigo AS competencia_codigo, c.nombre AS competencia,
+                    r.id AS resultado_id, r.codigo AS resultado_codigo, r.descripcion AS resultado,
+                    COALESCE(latest.juicio, 'por_evaluar') AS juicio, latest.evaluado_en
+                FROM fichas_usuarios fu
+                JOIN fichas f ON f.id = fu.ficha_id
+                JOIN programas p ON p.id = f.programa_id
+                JOIN competencias c ON c.programa_id = p.id
+                JOIN resultados_aprendizaje r ON r.competencia_id = c.id
+                LEFT JOIN (
+                    SELECT j.estudiante_id, j.resultado_id, j.juicio, j.evaluado_en
+                    FROM juicios_resultados j
+                    JOIN (
+                        SELECT estudiante_id, resultado_id, MAX(id) AS max_id
+                        FROM juicios_resultados GROUP BY estudiante_id, resultado_id
+                    ) latest_id ON latest_id.max_id = j.id
+                ) latest ON latest.estudiante_id = fu.usuario_id AND latest.resultado_id = r.id
+                WHERE fu.usuario_id = ?
+                ORDER BY p.nombre, f.codigo, c.nombre, r.codigo");
+            $stmt->execute([$studentId]);
+            respond(['data' => $stmt->fetchAll()]);
+        }
+        if ($section === 'formation' && ($parts[2] ?? '') === 'pdf' && $method === 'GET') {
+            if (!class_exists(\Dompdf\Dompdf::class)) {
+                respond(['error' => 'No está instalada la dependencia Dompdf para generar el historial PDF.'], 503);
+            }
+            $history = $db->prepare("SELECT p.nombre AS programa, f.codigo AS ficha, f.trimestre,
+                    c.nombre AS competencia, r.codigo AS resultado_codigo, r.descripcion AS resultado,
+                    j.juicio, j.evaluado_en, CONCAT(e.nombres, ' ', e.apellidos) AS evaluador
+                FROM juicios_resultados j
+                JOIN resultados_aprendizaje r ON r.id = j.resultado_id
+                JOIN competencias c ON c.id = r.competencia_id
+                JOIN programas p ON p.id = c.programa_id
+                JOIN usuarios e ON e.id = j.evaluado_por
+                JOIN fichas_usuarios fu ON fu.usuario_id = j.estudiante_id
+                JOIN fichas f ON f.id = fu.ficha_id AND f.programa_id = p.id
+                WHERE j.estudiante_id = ?
+                ORDER BY j.evaluado_en DESC, j.id DESC");
+            $history->execute([$studentId]);
+            $identity = htmlspecialchars($student['nombres'] . ' ' . $student['apellidos'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $html = '<meta charset="utf-8"><h1>Historial académico</h1><p>Aprendiz: ' . $identity . '</p><table border="1" cellspacing="0" cellpadding="5"><thead><tr><th>Programa</th><th>Ficha / trimestre</th><th>Competencia</th><th>Código de resultado</th><th>Descripción</th><th>Juicio</th><th>Fecha</th><th>Evaluador</th></tr></thead><tbody>';
+            foreach ($history->fetchAll() as $row) {
+                $html .= '<tr>';
+                foreach (['programa','ficha','competencia','resultado_codigo','resultado','juicio','evaluado_en','evaluador'] as $field) {
+                    $value = (string)($row[$field] ?? '');
+                    if ($field === 'ficha' && $row['trimestre'] !== null) {
+                        $value .= ' · Trimestre ' . (int)$row['trimestre'];
+                    }
+                    $html .= '<td>' . htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>';
+                }
+                $html .= '</tr>';
+            }
+            $html .= '</tbody></table>';
+            $pdf = new \Dompdf\Dompdf();
+            $pdf->loadHtml($html, 'UTF-8');
+            $pdf->setPaper('A4', 'landscape');
+            $pdf->render();
+            header('Content-Type: application/pdf');
+            header('Content-Disposition: attachment; filename="historial-academico.pdf"');
+            echo $pdf->output();
+            exit;
+        }
+        respond(['error' => 'Ruta del portal aprendiz no encontrada.'], 404);
+    }
     if ($route === 'auth' && ($parts[1] ?? '') === 'recovery' && $method === 'POST') {
         $data = body();
         try {
@@ -881,9 +1866,68 @@ try {
         $db->commit();
         respond(['data' => ['message' => 'Contrasena actualizada.']]);
     }
+    if ($route === 'settings') {
+        $actor = requireRoles($user, ['administrador']);
+        if ($method === 'GET') {
+            respond(['data' => systemSettings($db)]);
+        }
+        if ($method === 'PUT') {
+            $data = body();
+            $limits = [
+                'asistencia_alerta_amarilla' => [1, 100],
+                'asistencia_alerta_roja' => [1, 99],
+                'dias_habiles_excusa' => [1, 30],
+                'horas_correccion_asistencia' => [1, 720],
+                'pin_intentos_maximos' => [1, 10],
+                'pin_bloqueo_minutos' => [1, 120],
+            ];
+            if (array_diff(array_keys($data), array_keys($limits)) || array_diff(array_keys($limits), array_keys($data))) {
+                respond(['error' => 'La configuración enviada está incompleta o contiene opciones no admitidas.'], 422);
+            }
+            $values = [];
+            foreach ($limits as $key => [$minimum, $maximum]) {
+                $value = $data[$key];
+                if (!is_int($value) || $value < $minimum || $value > $maximum) {
+                    respond(['error' => "El valor de {$key} debe estar entre {$minimum} y {$maximum}."], 422);
+                }
+                $values[$key] = $value;
+            }
+            if ($values['asistencia_alerta_roja'] >= $values['asistencia_alerta_amarilla']) {
+                respond(['error' => 'La alerta roja debe ser menor que la alerta amarilla.'], 422);
+            }
+            $db->beginTransaction();
+            try {
+                $save = $db->prepare('INSERT INTO configuracion_sistema (clave, valor, actualizado_por)
+                    VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE valor = VALUES(valor), actualizado_por = VALUES(actualizado_por)');
+                foreach ($values as $key => $value) {
+                    $save->execute([$key, $value, (int)$actor['id']]);
+                }
+                audit($db, (int)$actor['id'], 'actualizar_configuracion', 'configuracion_sistema', null, $values);
+                $db->commit();
+            } catch (Throwable $exception) {
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
+                throw $exception;
+            }
+            respond(['data' => ['settings' => systemSettings($db), 'message' => 'Configuración guardada.']]);
+        }
+        respond(['error' => 'Método no permitido para la configuración.'], 405);
+    }
+    if ($route === 'audit-log' && $method === 'GET') {
+        requireRoles($user, ['administrador']);
+        $stmt = $db->query("SELECT a.id, a.fecha_hora,
+                COALESCE(CONCAT(u.nombres, ' ', u.apellidos), 'Usuario eliminado') AS actor,
+                a.accion, a.entidad, a.entidad_id, CAST(a.detalle AS CHAR) AS detalle
+            FROM auditoria a LEFT JOIN usuarios u ON u.id = a.usuario_id
+            ORDER BY a.fecha_hora DESC, a.id DESC LIMIT 500");
+        respond(['data' => $stmt->fetchAll()]);
+    }
 
     $roles = [
         'users' => ['administrador'], 'ficha-assignments' => ['administrador'],
+        'programs' => ['administrador'], 'competencies' => ['administrador'],
+        'learning-outcomes' => ['administrador'], 'academic-calendar' => ['administrador'],
         'environments' => ['administrador','instructor'],
         'fichas' => ['administrador'], 'enrollments' => ['administrador'], 'cards' => ['administrador','estudiante'], 'maintenance' => ['administrador'],
         'schedules' => ['administrador','instructor','estudiante'],
@@ -912,13 +1956,15 @@ try {
     }
     if ($route === 'options' && $method === 'GET') {
         $actor = requireRoles($user, ['administrador','instructor']);
-        $fichaSql = "SELECT id, codigo, nombre, programa, trimestre FROM fichas
-            WHERE fecha_inicio <= CURRENT_DATE() AND fecha_fin >= CURRENT_DATE()";
+        $fichaSql = "SELECT f.id, f.codigo, f.nombre, f.programa_id, f.estado,
+                (f.fecha_inicio <= CURRENT_DATE() AND f.fecha_fin >= CURRENT_DATE()) AS vigente,
+                COALESCE(p.nombre, f.programa) AS programa, f.trimestre
+            FROM fichas f LEFT JOIN programas p ON p.id = f.programa_id";
         if ($actor['rol'] === 'instructor') {
-            $fichaSql .= ' AND EXISTS (SELECT 1 FROM fichas_instructores fi
-                WHERE fi.ficha_id = fichas.id AND fi.instructor_id = ?)';
+            $fichaSql .= ' WHERE EXISTS (SELECT 1 FROM fichas_instructores fi
+                    WHERE fi.ficha_id = f.id AND fi.instructor_id = ?)';
         }
-        $fichaSql .= ' ORDER BY codigo';
+        $fichaSql .= ' ORDER BY f.codigo';
         $fichaStmt = $db->prepare($fichaSql);
         $fichaStmt->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
         $fichas = $fichaStmt->fetchAll();
@@ -944,11 +1990,33 @@ try {
         $studentStmt = $db->prepare($studentSql);
         $studentStmt->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
         $students = $studentStmt->fetchAll();
+        $programs = $db->query("SELECT id, codigo, nombre, nivel, duracion_trimestres, estado
+            FROM programas ORDER BY nombre")->fetchAll();
+        $competencies = $db->query("SELECT c.id, c.codigo, c.nombre, c.programa_id, c.estado,
+                p.nombre AS programa
+            FROM competencias c JOIN programas p ON p.id = c.programa_id
+            ORDER BY p.nombre, c.nombre")->fetchAll();
+        $outcomeSql = "SELECT r.id, r.codigo, r.descripcion, c.programa_id,
+                CONCAT(c.codigo, ' · ', c.nombre, ' — ', r.codigo, ' · ', r.descripcion) AS etiqueta
+            FROM resultados_aprendizaje r JOIN competencias c ON c.id = r.competencia_id
+            WHERE r.estado = 'activo' AND c.estado = 'activo'";
+        if ($actor['rol'] === 'instructor') {
+            $outcomeSql .= ' AND EXISTS (SELECT 1 FROM fichas f
+                JOIN fichas_instructores fi ON fi.ficha_id = f.id
+                WHERE f.programa_id = c.programa_id AND fi.instructor_id = ?)';
+        }
+        $outcomeSql .= ' ORDER BY c.nombre, r.codigo';
+        $outcomeStmt = $db->prepare($outcomeSql);
+        $outcomeStmt->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
+        $outcomes = $outcomeStmt->fetchAll();
         respond(['data' => ['fichas' => $fichas, 'ambientes' => $ambientes,
-            'instructores' => $instructors, 'estudiantes' => $students]]);
+            'instructores' => $instructors, 'estudiantes' => $students,
+            'programas' => $programs, 'competencias' => $competencies,
+            'resultados' => $outcomes]]);
     }
     if ($route === 'attendance' && ($parts[1] ?? '') === 'alerts' && $method === 'GET') {
         $actor = requireRoles($user, ['administrador','instructor']);
+        $settings = systemSettings($db);
         $alertSql = "SELECT a.usuario_id, u.documento, u.nombres, u.apellidos, a.fecha, a.estado
             FROM asistencias a
             JOIN usuarios u ON u.id = a.usuario_id
@@ -976,11 +2044,46 @@ try {
                         'documento' => $row['documento'],
                         'estudiante' => $row['nombres'] . ' ' . $row['apellidos'],
                         'fechas' => array_slice($absences[$studentId], 0, 3),
+                        'tipo' => 'inasistencias_consecutivas',
+                        'nivel' => 'roja',
                     ];
                 }
             } else {
                 $absences[$studentId] = [];
             }
+        }
+        $attendanceRateSql = "SELECT u.id, u.documento, u.nombres, u.apellidos,
+                SUM(a.estado IN ('presente','tarde')) AS asistencias_efectivas,
+                SUM(a.estado IN ('presente','tarde','ausente')) AS sesiones_evaluadas
+            FROM asistencias a
+            JOIN usuarios u ON u.id = a.usuario_id AND u.activo = 1
+            JOIN roles r ON r.id = u.rol_id AND r.nombre = 'estudiante'
+            " . ($actor['rol'] === 'instructor'
+                ? 'WHERE EXISTS (SELECT 1 FROM fichas_instructores fi
+                    WHERE fi.ficha_id = a.ficha_id AND fi.instructor_id = ?)'
+                : 'WHERE 1 = 1') . "
+            GROUP BY u.id, u.documento, u.nombres, u.apellidos
+            HAVING sesiones_evaluadas > 0
+            ORDER BY u.apellidos, u.nombres";
+        $rateStmt = $db->prepare($attendanceRateSql);
+        $rateStmt->execute($actor['rol'] === 'instructor' ? [(int)$actor['id']] : []);
+        foreach ($rateStmt->fetchAll() as $row) {
+            $studentId = (int)$row['id'];
+            if (isset($alerts[$studentId])) {
+                continue;
+            }
+            $rate = (int)round(100 * (int)$row['asistencias_efectivas'] / (int)$row['sesiones_evaluadas']);
+            if ($rate >= $settings['asistencia_alerta_amarilla']) {
+                continue;
+            }
+            $alerts[$studentId] = [
+                'usuario_id' => $studentId,
+                'documento' => $row['documento'],
+                'estudiante' => $row['nombres'] . ' ' . $row['apellidos'],
+                'porcentaje' => $rate,
+                'tipo' => 'asistencia_baja',
+                'nivel' => $rate < $settings['asistencia_alerta_roja'] ? 'roja' : 'amarilla',
+            ];
         }
         respond(['data' => array_values($alerts)]);
     }
@@ -1341,6 +2444,9 @@ try {
             $existing->execute($existingParams);
             $previous = $existing->fetch();
             if ($previous) {
+                if ($previous['estado'] !== $data['estado'] || $previous['observacion'] !== $observation) {
+                    requireAttendanceCorrectionWindow($db, (int)$previous['id'], $actor);
+                }
                 $stmt = $db->prepare('UPDATE asistencias SET estado = ?, observacion = ?, registrado_por = ? WHERE id = ?');
                 $stmt->execute([$data['estado'], $observation, $actor['id'], $previous['id']]);
                 $id = (int)$previous['id'];
@@ -1424,11 +2530,15 @@ try {
         'users' => ['table'=>'usuarios','columns'=>['id','rol_id','documento','nombres','apellidos','correo','telefono','activo','ultimo_acceso','creado_en'],'fields'=>['rol_id','documento','nombres','apellidos','correo','password','telefono','activo']],
         'ficha-assignments' => ['table'=>'fichas_instructores','columns'=>['id','ficha_id','instructor_id'],'fields'=>['ficha_id','instructor_id']],
         'environments' => ['table'=>'ambientes','columns'=>['id','codigo','nombre','ubicacion','capacidad','estado','descripcion'],'fields'=>['codigo','nombre','ubicacion','capacidad','estado','descripcion']],
-        'fichas' => ['table'=>'fichas','columns'=>['id','codigo','programa','fecha_inicio','fecha_fin','estado'],'fields'=>['codigo','nombre','programa','trimestre','fecha_inicio','fecha_fin']],
+        'fichas' => ['table'=>'fichas','columns'=>['id','codigo','programa_id','nombre','programa','trimestre','fecha_inicio','fecha_fin','estado'],'fields'=>['codigo','programa_id','nombre','programa','trimestre','fecha_inicio','fecha_fin']],
+        'programs' => ['table'=>'programas','columns'=>['id','codigo','nombre','nivel','duracion_trimestres','estado'],'fields'=>['codigo','nombre','nivel','duracion_trimestres','estado']],
+        'competencies' => ['table'=>'competencias','columns'=>['id','codigo','nombre','programa_id','estado'],'fields'=>['codigo','nombre','programa_id','estado']],
+        'learning-outcomes' => ['table'=>'resultados_aprendizaje','columns'=>['id','codigo','descripcion','competencia_id','estado'],'fields'=>['codigo','descripcion','competencia_id','estado']],
+        'academic-calendar' => ['table'=>'calendario_academico','columns'=>['id','fecha','tipo','descripcion','estado'],'fields'=>['fecha','tipo','descripcion','estado']],
         'enrollments' => ['table'=>'fichas_usuarios','columns'=>['id','ficha_id','usuario_id','inscrito_en'],'fields'=>['ficha_id','usuario_id']],
         'cards' => ['table'=>'carnets','columns'=>['id','usuario_id','codigo_qr','emitido_en','vence_en'],'fields'=>['usuario_id','codigo_qr','vence_en']],
         'maintenance' => ['table'=>'mantenimientos','columns'=>['id','ambiente_id','responsable_id','tipo','descripcion','programado_en','finalizado_en','estado'],'fields'=>['ambiente_id','responsable_id','tipo','descripcion','programado_en','finalizado_en','estado']],
-        'schedules' => ['table'=>'horarios','columns'=>['id','ficha_id','ambiente_id','instructor_id','dia_semana','hora_inicio','hora_fin','asignatura'],'fields'=>['ficha_id','ambiente_id','instructor_id','dia_semana','hora_inicio','hora_fin','asignatura']],
+        'schedules' => ['table'=>'horarios','columns'=>['id','ficha_id','competencia_id','ambiente_id','instructor_id','dia_semana','hora_inicio','hora_fin','asignatura'],'fields'=>['ficha_id','competencia_id','ambiente_id','instructor_id','dia_semana','hora_inicio','hora_fin','asignatura']],
         'reservations' => ['table'=>'reservas','columns'=>['id','ambiente_id','usuario_id','inicio','fin','motivo','estado','creado_en'],'fields'=>['ambiente_id','usuario_id','inicio','fin','motivo','estado']],
         'attendance' => ['table'=>'asistencias','columns'=>['id','usuario_id','ficha_id','horario_id','fecha','estado','registrado_por','observacion','registrado_en'],'fields'=>['usuario_id','ficha_id','horario_id','fecha','estado','observacion','registrado_por']],
         'novelties' => ['table'=>'novedades','columns'=>['id','usuario_id','asistencia_id','tipo','descripcion','fecha','registrado_por'],'fields'=>['usuario_id','asistencia_id','tipo','descripcion','fecha','registrado_por']],
@@ -1556,7 +2666,7 @@ try {
         if (isset($data['observacion']) && (!is_string($data['observacion']) || mb_strlen($data['observacion']) > 500)) {
             respond(['error' => 'La observación debe tener máximo 500 caracteres.'], 422);
         }
-        $previousStmt = $db->prepare('SELECT usuario_id, ficha_id, horario_id, estado, fecha, observacion FROM asistencias WHERE id = ?');
+        $previousStmt = $db->prepare('SELECT usuario_id, ficha_id, horario_id, estado, fecha, observacion, registrado_en FROM asistencias WHERE id = ?');
         $previousStmt->execute([$id]);
         $previous = $previousStmt->fetch();
         if (!$previous) {
@@ -1568,6 +2678,12 @@ try {
             if (!$assignedFicha->fetchColumn()) {
                 respond(['error' => 'Solo puedes modificar asistencias de tus fichas asignadas.'], 403);
             }
+        }
+        $newStatus = $data['estado'] ?? $previous['estado'];
+        $newObservation = array_key_exists('observacion', $data) ? ($data['observacion'] === '' ? null : $data['observacion']) : $previous['observacion'];
+        if ($actor['rol'] === 'instructor' &&
+            ($previous['estado'] !== $newStatus || $previous['observacion'] !== $newObservation)) {
+            requireAttendanceCorrectionWindow($db, $id, $actor);
         }
         $db->beginTransaction();
         try {
@@ -1581,8 +2697,6 @@ try {
             $stmt = $db->prepare('UPDATE asistencias SET ' . implode(', ', $fields) . ' WHERE id = ?');
             $stmt->execute($values);
             audit($db, (int)$actor['id'], 'actualizar', 'asistencias', $id);
-            $newStatus = $data['estado'] ?? $previous['estado'];
-            $newObservation = array_key_exists('observacion', $data) ? ($data['observacion'] === '' ? null : $data['observacion']) : $previous['observacion'];
             if ($previous['estado'] !== $newStatus || $previous['observacion'] !== $newObservation) {
                 notifyAttendance($db, (int)$previous['usuario_id'], (int)$previous['ficha_id'],
                     $previous['horario_id'] === null ? null : (int)$previous['horario_id'],
@@ -1623,6 +2737,13 @@ try {
         $where = null;
         $params = [];
     }
+    if ($route === 'attendance' && $method === 'GET' && isset($_GET['estado'])) {
+        if (!in_array($_GET['estado'], ['presente','ausente','tarde','permiso'], true)) {
+            respond(['error' => 'El estado de asistencia no es válido.'], 422);
+        }
+        $where = ($where === null ? '' : $where . ' AND ') . 'estado = ?';
+        $params[] = $_GET['estado'];
+    }
     if ($route === 'attendance' && $method === 'GET') {
         foreach (['desde' => 'fecha >= ?', 'hasta' => 'fecha <= ?'] as $queryKey => $condition) {
             if (isset($_GET[$queryKey]) && $_GET[$queryKey] !== '') {
@@ -1639,15 +2760,16 @@ try {
 
     if ($method === 'GET') {
         if ($route === 'fichas') {
-            $fichaSql = "SELECT id, codigo, programa, fecha_inicio, fecha_fin,
+            $fichaSql = "SELECT f.id, f.codigo, f.programa_id, f.nombre,
+                    COALESCE(p.nombre, f.programa) AS programa, f.fecha_inicio, f.fecha_fin,
                     CASE
-                        WHEN fecha_inicio IS NOT NULL AND fecha_inicio > CURRENT_DATE() THEN 'Programada'
-                        WHEN fecha_fin IS NOT NULL AND fecha_fin < CURRENT_DATE() THEN 'Terminada'
+                        WHEN f.fecha_inicio IS NOT NULL AND f.fecha_inicio > CURRENT_DATE() THEN 'Programada'
+                        WHEN f.fecha_fin IS NOT NULL AND f.fecha_fin < CURRENT_DATE() THEN 'Terminada'
                         ELSE 'Activa'
                     END AS estado
-                FROM fichas";
+                FROM fichas f LEFT JOIN programas p ON p.id = f.programa_id";
             if ($id !== null) {
-                $stmt = $db->prepare($fichaSql . ' WHERE id = ? LIMIT 1');
+                $stmt = $db->prepare($fichaSql . ' WHERE f.id = ? LIMIT 1');
                 $stmt->execute([$id]);
                 $row = $stmt->fetch();
                 if (!$row) {
@@ -1655,7 +2777,42 @@ try {
                 }
                 respond(['data' => $row]);
             }
-            respond(['data' => $db->query($fichaSql . ' ORDER BY codigo LIMIT 200')->fetchAll()]);
+            respond(['data' => $db->query($fichaSql . ' ORDER BY f.codigo LIMIT 200')->fetchAll()]);
+        }
+        if ($route === 'competencies') {
+            $sql = "SELECT c.id, c.codigo, c.nombre, c.programa_id, p.nombre AS programa, c.estado
+                FROM competencias c JOIN programas p ON p.id = c.programa_id";
+            $stmt = $id === null
+                ? $db->query($sql . ' ORDER BY p.nombre, c.nombre LIMIT 200')
+                : $db->prepare($sql . ' WHERE c.id = ? LIMIT 1');
+            if ($id !== null) {
+                $stmt->execute([$id]);
+                $row = $stmt->fetch();
+                if (!$row) {
+                    respond(['error' => 'Registro no encontrado.'], 404);
+                }
+                respond(['data' => $row]);
+            }
+            respond(['data' => $stmt->fetchAll()]);
+        }
+        if ($route === 'learning-outcomes') {
+            $sql = "SELECT r.id, r.codigo, r.descripcion, r.competencia_id,
+                    c.nombre AS competencia, c.programa_id, p.nombre AS programa, r.estado
+                FROM resultados_aprendizaje r
+                JOIN competencias c ON c.id = r.competencia_id
+                JOIN programas p ON p.id = c.programa_id";
+            $stmt = $id === null
+                ? $db->query($sql . ' ORDER BY p.nombre, c.nombre, r.codigo LIMIT 200')
+                : $db->prepare($sql . ' WHERE r.id = ? LIMIT 1');
+            if ($id !== null) {
+                $stmt->execute([$id]);
+                $row = $stmt->fetch();
+                if (!$row) {
+                    respond(['error' => 'Registro no encontrado.'], 404);
+                }
+                respond(['data' => $row]);
+            }
+            respond(['data' => $stmt->fetchAll()]);
         }
         if ($route === 'users') {
             $stmt = $db->query("SELECT u.id, u.rol_id, r.nombre AS rol, u.documento, u.nombres, u.apellidos,
@@ -1701,13 +2858,16 @@ try {
             respond(['data' => $stmt->fetchAll()]);
         }
         if ($route === 'schedules') {
-            $scheduleSql = "SELECT h.id, h.ficha_id, h.ambiente_id, h.instructor_id, h.dia_semana,
+            $scheduleSql = "SELECT h.id, h.ficha_id, h.competencia_id, h.ambiente_id, h.instructor_id, h.dia_semana,
                     CASE h.dia_semana WHEN 1 THEN 'Lunes' WHEN 2 THEN 'Martes' WHEN 3 THEN 'Miércoles'
                         WHEN 4 THEN 'Jueves' WHEN 5 THEN 'Viernes' WHEN 6 THEN 'Sábado' WHEN 7 THEN 'Domingo' END AS dia,
-                    h.hora_inicio, h.hora_fin, h.asignatura, f.codigo AS ficha_codigo,
-                    f.nombre AS ficha_nombre, f.programa, f.trimestre, a.codigo AS ambiente_codigo,
+                    h.hora_inicio, h.hora_fin, h.asignatura, c.nombre AS competencia,
+                    f.codigo AS ficha_codigo,
+                    f.nombre AS ficha_nombre, COALESCE(p.nombre, f.programa) AS programa, f.trimestre, a.codigo AS ambiente_codigo,
                     a.nombre AS ambiente, CONCAT(u.nombres, ' ', u.apellidos) AS instructor
                 FROM horarios h JOIN fichas f ON f.id = h.ficha_id
+                LEFT JOIN programas p ON p.id = f.programa_id
+                LEFT JOIN competencias c ON c.id = h.competencia_id
                 JOIN ambientes a ON a.id = h.ambiente_id
                 JOIN usuarios u ON u.id = h.instructor_id";
             if ($actor['rol'] === 'estudiante') {
@@ -1754,12 +2914,15 @@ try {
     if ($method === 'POST' && $id === null) {
         $data = body();
         if ($route === 'fichas') {
-            validateFichaInput($data);
+            validateFichaInput($db, $data);
             $existingCode = $db->prepare('SELECT 1 FROM fichas WHERE codigo = ?');
             $existingCode->execute([$data['codigo']]);
             if ($existingCode->fetchColumn()) {
                 respond(['error' => 'Ya existe una ficha con ese número.'], 409);
             }
+        }
+        if (in_array($route, ['programs','competencies','learning-outcomes','academic-calendar'], true)) {
+            validateAcademicResource($db, $route, $data);
         }
         if ($route === 'ficha-assignments') {
             foreach (['ficha_id','instructor_id'] as $field) {
@@ -1792,6 +2955,9 @@ try {
                 respond(['error' => 'Solo puedes gestionar horarios de tus fichas asignadas.'], 403);
             }
         }
+        if ($route === 'schedules') {
+            validateScheduleCompetency($db, $data);
+        }
         if ($route === 'users' && (!isset($data['password']) || !isset($data['rol_id']))) {
             respond(['error' => 'Se requieren rol_id y password al crear un usuario.'], 422);
         }
@@ -1819,6 +2985,9 @@ try {
         if ($route === 'attendance' || $route === 'novelties') {
             $data['registrado_por'] = $actor['id'];
         }
+        if ($route === 'novelties') {
+            validateAbsenceExcuse($db, $data, $actor);
+        }
         if ($route === 'novelties' && $actor['rol'] === 'instructor') {
             $studentAssignment = $db->prepare('SELECT 1 FROM fichas_usuarios fu
                 JOIN fichas_instructores fi ON fi.ficha_id = fu.ficha_id
@@ -1832,14 +3001,23 @@ try {
     }
     if (in_array($method, ['PUT','PATCH'], true) && $id !== null) {
         $data = body();
+        if ($route === 'novelties') {
+            $existingNovelty = $db->prepare('SELECT usuario_id, asistencia_id, tipo, fecha FROM novedades WHERE id = ?');
+            $existingNovelty->execute([$id]);
+            $currentNovelty = $existingNovelty->fetch();
+            if (!$currentNovelty) {
+                respond(['error' => 'Registro no encontrado.'], 404);
+            }
+            validateAbsenceExcuse($db, $data, $actor, $currentNovelty);
+        }
         if ($route === 'fichas') {
-            $existingFicha = $db->prepare('SELECT codigo, programa, fecha_inicio, fecha_fin FROM fichas WHERE id = ?');
+            $existingFicha = $db->prepare('SELECT codigo, programa, programa_id, fecha_inicio, fecha_fin FROM fichas WHERE id = ?');
             $existingFicha->execute([$id]);
             $currentFicha = $existingFicha->fetch();
             if (!$currentFicha) {
                 respond(['error' => 'Registro no encontrado.'], 404);
             }
-            validateFichaInput($data, $currentFicha);
+            validateFichaInput($db, $data, $currentFicha);
             if (isset($data['codigo'])) {
                 $duplicateCode = $db->prepare('SELECT 1 FROM fichas WHERE codigo = ? AND id <> ?');
                 $duplicateCode->execute([$data['codigo'], $id]);
@@ -1847,6 +3025,21 @@ try {
                     respond(['error' => 'Ya existe otra ficha con ese número.'], 409);
                 }
             }
+        }
+        if (in_array($route, ['programs','competencies','learning-outcomes','academic-calendar'], true)) {
+            $table = [
+                'programs'=>'programas',
+                'competencies'=>'competencias',
+                'learning-outcomes'=>'resultados_aprendizaje',
+                'academic-calendar'=>'calendario_academico',
+            ][$route];
+            $currentStmt = $db->prepare("SELECT * FROM {$table} WHERE id = ?");
+            $currentStmt->execute([$id]);
+            $currentAcademicRecord = $currentStmt->fetch();
+            if (!$currentAcademicRecord) {
+                respond(['error' => 'Registro no encontrado.'], 404);
+            }
+            validateAcademicResource($db, $route, $data, $currentAcademicRecord, $id);
         }
         if ($route === 'ficha-assignments') {
             $existingAssignment = $db->prepare('SELECT ficha_id, instructor_id FROM fichas_instructores WHERE id = ?');
@@ -1887,6 +3080,15 @@ try {
                 respond(['error' => 'Solo puedes gestionar horarios de tus fichas asignadas.'], 403);
             }
         }
+        if ($route === 'schedules') {
+            $currentStmt = $db->prepare('SELECT * FROM horarios WHERE id = ?');
+            $currentStmt->execute([$id]);
+            $currentSchedule = $currentStmt->fetch();
+            if (!$currentSchedule) {
+                respond(['error' => 'Registro no encontrado.'], 404);
+            }
+            validateScheduleCompetency($db, $data, $currentSchedule);
+        }
         if ($route === 'novelties' && $actor['rol'] === 'instructor') {
             $existingNovelty = $db->prepare('SELECT usuario_id FROM novedades WHERE id = ?');
             $existingNovelty->execute([$id]);
@@ -1910,11 +3112,14 @@ try {
         if ($route === 'blocks') {
             respond(['error' => 'El historial de bloqueos se conserva; use la acción Desbloquear.'], 409);
         }
+        if (in_array($route, ['programs','competencies','learning-outcomes','academic-calendar'], true)) {
+            respond(['error' => 'Los registros académicos se conservan; cambia su estado a inactivo en lugar de eliminarlos.'], 409);
+        }
         $db->beginTransaction();
         try {
             $removalNotice = null;
             if ($route === 'attendance') {
-                $attendance = $db->prepare('SELECT usuario_id, ficha_id, horario_id, fecha, estado, observacion FROM asistencias WHERE id = ?');
+                $attendance = $db->prepare('SELECT usuario_id, ficha_id, horario_id, fecha, estado, observacion, registrado_en FROM asistencias WHERE id = ?');
                 $attendance->execute([$id]);
                 $removalNotice = $attendance->fetch();
                 if ($actor['rol'] === 'instructor' && $removalNotice) {
@@ -1924,6 +3129,7 @@ try {
                         $db->rollBack();
                         respond(['error' => 'Solo puedes eliminar asistencias de tus fichas asignadas.'], 403);
                     }
+                    requireAttendanceCorrectionWindow($db, $id, $actor);
                 }
             } elseif ($route === 'enrollments') {
                 $enrollment = $db->prepare("SELECT fu.ficha_id, fu.usuario_id, f.codigo, f.nombre,

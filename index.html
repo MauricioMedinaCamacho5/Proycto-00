@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#087c45">
   <title>Gestión Institucional · SENA</title>
   <link rel="icon" type="image/svg+xml" href="web/assets/images/portal-mark.svg">
-  <link rel="stylesheet" href="web/assets/css/app.css?v=20261022-progreso-ficha-v5">
+  <link rel="stylesheet" href="web/assets/css/app.css?v=20261022-learner-module-v1">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -66,13 +66,26 @@
       <div class="login-scan-actions"><button id="scan-login-barcode" class="button secondary" type="button">Escanear código QR</button><button id="choose-login-photo" class="button secondary" type="button">Elegir imagen del QR</button></div>
       <input id="login-photo" class="hidden" type="file" accept="image/*">
       <div id="login-scanner" class="registration-scanner hidden"><video id="login-video" autoplay playsinline muted></video></div>
-      <p id="login-scan-message" class="scanner-message" role="status">Escanea el QR de tu carné o elige una imagen que lo contenga. Cualquier persona con una copia del QR podrá entrar a tu cuenta.</p>
+      <p id="login-scan-message" class="scanner-message" role="status">Escanea el QR de tu carné. También necesitarás el PIN que configuraste al registrarte.</p>
+      <section id="login-pin-panel" class="hidden" aria-live="polite">
+        <div class="login-pin-profile">
+          <img id="login-pin-photo" class="hidden" alt="Foto de la persona titular del carné">
+          <strong id="login-pin-name"></strong>
+          <span id="login-pin-document"></span>
+        </div>
+        <form id="login-pin-form">
+          <label>PIN del carné<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" autocomplete="one-time-code" required></label>
+          <button class="button primary full" type="submit">Ingresar</button>
+          <button id="login-pin-cancel" class="text-button" type="button">Usar otro carné</button>
+        </form>
+      </section>
       <details class="legacy-login">
-        <summary>¿Ya tenías una cuenta? Acceso temporal para obtener tu carné</summary>
+        <summary>Ingresar con documento o correo y contraseña</summary>
         <form id="legacy-login-form">
-          <label>Correo electrónico<input name="correo" type="email" autocomplete="username" required></label>
+          <label>Documento o correo electrónico<input name="identificador" autocomplete="username" required></label>
           <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
-          <button class="button primary full" type="submit">Entrar y descargar mi carné</button>
+          <label>PIN del carné (opcional para configurar o cambiar)<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" autocomplete="new-password"></label>
+          <button class="button primary full" type="submit">Ingresar</button>
         </form>
         <button id="forgot-password" class="text-button" type="button">Olvidé mi contraseña</button>
       </details>
@@ -117,13 +130,26 @@
             <span id="registration-ficha-options" class="role-picker-menu hidden" role="listbox" aria-label="Fichas activas"></span>
           </span>
         </label>
-        <label>Documento / cédula<input id="registration-document" name="documento" maxlength="30" autocomplete="off" required></label>
+        <label>Tipo de documento
+          <select name="tipo_documento" required>
+            <option value="CC">Cédula de ciudadanía</option>
+            <option value="TI">Tarjeta de identidad</option>
+            <option value="CE">Cédula de extranjería</option>
+            <option value="PEP">Permiso especial de permanencia</option>
+            <option value="PPT">Permiso por protección temporal</option>
+            <option value="PAS">Pasaporte</option>
+          </select>
+        </label>
+        <label>Documento / número<input id="registration-document" name="documento" maxlength="30" autocomplete="off" required></label>
         <label>Teléfono<input name="telefono" maxlength="30" type="tel" autocomplete="tel" required></label>
         <label>Nombres<input name="nombres" maxlength="100" autocomplete="given-name" required></label>
         <label>Apellidos<input name="apellidos" maxlength="100" autocomplete="family-name" required></label>
         <label class="registration-wide">Correo electrónico (por ejemplo, Gmail)<input name="correo" type="email" maxlength="190" autocomplete="email" required></label>
         <label>Contraseña<input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
         <label>Confirmar contraseña<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label>
+        <label>PIN del carné (4 a 6 números)<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" autocomplete="new-password" required></label>
+        <label>Confirmar PIN<input name="confirm_pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" autocomplete="new-password" required></label>
+        <label class="registration-wide consent-check"><input name="acepta_tratamiento_datos" type="checkbox" required> Acepto el tratamiento de mis datos personales para la gestión de mi proceso formativo, conforme a la Ley 1581 de 2012.</label>
         <div class="registration-wide photo-upload-field">
           <label for="registration-photo">Foto para el carné <span class="optional-label">OPCIONAL</span></label>
           <div class="photo-upload">
@@ -171,7 +197,18 @@
       <section id="dashboard-view" class="view">
         <p id="dashboard-message" class="message" role="status"></p>
         <div id="stats-grid" class="stats-grid"></div>
-        <section class="panel alerts-panel"><div class="panel-heading"><div><h2>Alertas de inasistencia</h2><p>Estudiantes con 3 ausencias consecutivas en los últimos 30 días.</p></div></div><div id="attendance-alerts" class="alert-list"></div></section>
+        <section id="learner-dashboard-panel" class="hidden">
+          <section class="panel learner-home-panel">
+            <div class="panel-heading"><div><p class="eyebrow">MI FORMACIÓN</p><h2 id="learner-welcome">Bienvenido</h2><p id="learner-program-summary"></p></div><button class="button secondary" type="button" data-open-module="profile">Mi perfil</button></div>
+            <div id="learner-attendance-alert" class="learner-attendance-alert hidden" role="status"></div>
+            <div id="learner-home-stats" class="student-attendance-stats"></div>
+          </section>
+          <section class="panel learner-classes-panel">
+            <div class="panel-heading"><div><h2>Clases de hoy</h2><p>Horarios asociados a tus fichas activas.</p></div><button class="button secondary" type="button" data-open-module="schedules">Ver mi horario</button></div>
+            <div id="learner-classes-today" class="learner-classes-list"></div>
+          </section>
+        </section>
+        <section class="panel alerts-panel"><div class="panel-heading"><div><h2>Alertas de asistencia</h2><p>Porcentaje inferior al umbral institucional o 3 faltas consecutivas.</p></div></div><div id="attendance-alerts" class="alert-list"></div></section>
         <section class="panel chart-panel">
           <div class="panel-heading"><div><h2>Actividad del día</h2><p>Asistencia y movimientos registrados hoy</p></div><span class="period-tag">HOY</span></div>
           <div class="chart-area"><canvas id="activity-chart" aria-label="Gráfica de actividad"></canvas></div>
@@ -179,6 +216,22 @@
         <p class="refresh-note">El panel se actualiza cada 8 segundos.</p>
       </section>
       <section id="resource-view" class="view hidden">
+        <section id="settings-panel" class="panel settings-panel hidden">
+          <div class="panel-heading"><div><h2>Reglas institucionales</h2><p>Administra las alertas de asistencia, los plazos institucionales y el bloqueo del PIN.</p></div></div>
+          <form id="settings-form">
+            <div class="form-grid settings-fields">
+              <label>Alerta amarilla de asistencia (%)<input name="asistencia_alerta_amarilla" type="number" min="1" max="100" required></label>
+              <label>Alerta roja de asistencia (%)<input name="asistencia_alerta_roja" type="number" min="1" max="99" required></label>
+              <label>Días hábiles para presentar excusa<input name="dias_habiles_excusa" type="number" min="1" max="30" required></label>
+              <label>Horas para corregir asistencia<input name="horas_correccion_asistencia" type="number" min="1" max="720" required></label>
+              <label>Intentos permitidos para el PIN<input name="pin_intentos_maximos" type="number" min="1" max="10" required></label>
+              <label>Minutos de bloqueo del PIN<input name="pin_bloqueo_minutos" type="number" min="1" max="120" required></label>
+            </div>
+            <p class="settings-note">Los umbrales de asistencia y las reglas del PIN se aplican de inmediato. Los plazos de excusas y correcciones quedan guardados para sus módulos de gestión.</p>
+            <p id="settings-message" class="message" role="status"></p>
+            <div class="dialog-actions"><button id="save-settings" class="button primary" type="submit">Guardar configuración</button></div>
+          </form>
+        </section>
         <section id="student-attendance-overview" class="student-attendance-overview hidden" aria-label="Resumen de asistencia">
           <div class="student-overview-heading"><div><p class="eyebrow">MI PROGRESO</p><h2>Asistencia a clases</h2><p id="student-attendance-caption">Tu resumen de asistencias registradas.</p></div><button id="student-view-history" class="button secondary" type="button">Ver mi historial</button></div>
           <div id="student-attendance-stats" class="student-attendance-stats"></div>
@@ -204,6 +257,26 @@
             <div class="attendance-ring" id="staff-progress-ring"><span id="staff-progress-rate">0%</span><small>asistencia</small></div>
             <div class="staff-progress-summary"><strong>Progreso general de la ficha</strong><p id="staff-progress-detail">Aún no hay asistencias registradas.</p><div class="staff-progress-track" role="progressbar" aria-label="Porcentaje de asistencia de la ficha" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="staff-progress-bar"></span></div></div>
           </div>
+        </section>
+        <div id="learner-schedule-controls" class="attendance-toolbar hidden" role="group" aria-label="Vista del horario">
+          <button id="learner-schedule-day" class="button secondary" type="button">Vista del día</button>
+          <button id="learner-schedule-week" class="button secondary" type="button">Vista de la semana</button>
+          <label class="learner-schedule-date">Fecha de consulta<input id="learner-schedule-date" type="date"></label>
+        </div>
+        <section id="learner-profile-panel" class="panel settings-panel hidden">
+          <div class="panel-heading"><div><h2>Mi perfil</h2><p>Solo puedes cambiar tu correo, celular, contraseña y PIN.</p></div></div>
+          <form id="learner-profile-form">
+            <div class="form-grid settings-fields">
+              <label>Correo electrónico<input name="correo" type="email" maxlength="190" autocomplete="email" required></label>
+              <label>Celular<input name="telefono" type="tel" maxlength="30" autocomplete="tel"></label>
+              <label>Contraseña actual<input name="current_password" type="password" autocomplete="current-password"></label>
+              <label>Nueva contraseña<input name="password" type="password" minlength="8" autocomplete="new-password"></label>
+              <label>Nuevo PIN del carné (4 a 6 dígitos)<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" autocomplete="new-password"></label>
+            </div>
+            <p class="muted">Para cambiar la contraseña o el PIN, escribe tu contraseña actual. El PIN se guarda como hash de verificación.</p>
+            <p id="learner-profile-message" class="message" role="status"></p>
+            <div class="dialog-actions"><button class="button primary" type="submit">Guardar cambios</button></div>
+          </form>
         </section>
         <div id="table-panel" class="panel table-panel">
           <div class="panel-heading"><div><h2 id="table-title">Registros</h2><p id="table-description"></p></div><div class="table-actions"><select id="report-format" aria-label="Formato de reporte"><option value="csv">CSV</option><option value="xlsx">Excel</option><option value="pdf">PDF</option></select><button id="export-report" class="button secondary">Exportar</button><button id="add-record" class="button primary">＋ Nuevo registro</button></div></div>
@@ -249,6 +322,17 @@
       <div class="dialog-actions"><button class="button secondary" id="cancel-attendance-edit" type="button">Cancelar</button><button class="button primary" type="submit">Guardar cambios</button></div>
     </form>
   </dialog>
+  <dialog id="learner-excuse-dialog">
+    <form id="learner-excuse-form" enctype="multipart/form-data">
+      <div class="dialog-heading"><div><p class="eyebrow">JUSTIFICAR INASISTENCIA</p><h2>Presentar una excusa</h2></div><button id="close-learner-excuse" class="icon-button" type="button" aria-label="Cerrar">×</button></div>
+      <input name="asistencia_id" type="hidden">
+      <p id="learner-excuse-date" class="muted"></p>
+      <label>Motivo<textarea name="descripcion" rows="4" maxlength="500" required></textarea></label>
+      <label>Soporte (PDF, JPG, PNG o WEBP, máximo 5 MB)<input name="soporte" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" required></label>
+      <p id="learner-excuse-message" class="message" role="status"></p>
+      <div class="dialog-actions"><button id="cancel-learner-excuse" class="button secondary" type="button">Cancelar</button><button class="button primary" type="submit">Enviar excusa</button></div>
+    </form>
+  </dialog>
   <dialog id="recovery-dialog">
     <form id="recovery-form" method="dialog">
       <div class="institution-lockup dialog-brand" aria-label="Servicio Nacional de Aprendizaje SENA, Centro de la Industria, la Empresa y los Servicios">
@@ -264,6 +348,6 @@
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script src="web/assets/js/app.js?v=20261022-progreso-ficha-v5"></script>
+  <script src="web/assets/js/app.js?v=20261022-learner-module-v1"></script>
 </body>
 </html>

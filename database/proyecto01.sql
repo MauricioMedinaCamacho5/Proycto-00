@@ -6,8 +6,9 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS verificaciones_correo, recuperacion_password, auditoria, notificaciones,
   permisos_temporales, prestamos, movimientos_equipos, equipos, visitantes,
   accesos, novedades, asistencias, reservas, horarios, mantenimientos, solicitudes_registro,
-  solicitudes_ficha, ambientes, fichas_usuarios, fichas_instructores, fichas,
-  bloqueos, carnets, usuarios, roles;
+  solicitudes_ficha, ambientes, fichas_usuarios, fichas_instructores,
+  resultados_aprendizaje, competencias, calendario_academico, fichas, programas,
+  configuracion_sistema, bloqueos, carnets, usuarios, roles;
 SET FOREIGN_KEY_CHECKS = 1;
 
 CREATE TABLE roles (
@@ -19,6 +20,7 @@ CREATE TABLE roles (
 CREATE TABLE usuarios (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   rol_id BIGINT UNSIGNED NOT NULL,
+  tipo_documento VARCHAR(20) NOT NULL DEFAULT 'CC',
   documento VARCHAR(30) NOT NULL UNIQUE,
   nombres VARCHAR(100) NOT NULL,
   apellidos VARCHAR(100) NOT NULL,
@@ -26,6 +28,7 @@ CREATE TABLE usuarios (
   password_hash VARCHAR(255) NOT NULL,
   telefono VARCHAR(30) NULL,
   foto MEDIUMTEXT NULL,
+  tratamiento_datos_aceptado_en DATETIME NULL,
   activo TINYINT(1) NOT NULL DEFAULT 1,
   ultimo_acceso DATETIME NULL,
   creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -49,6 +52,9 @@ CREATE TABLE carnets (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   usuario_id BIGINT UNSIGNED NOT NULL UNIQUE,
   codigo_qr CHAR(36) NOT NULL UNIQUE,
+  pin_hash VARCHAR(255) NULL,
+  pin_intentos_fallidos TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  pin_bloqueado_hasta DATETIME NULL,
   qr_entregado TINYINT(1) NOT NULL DEFAULT 0,
   emitido_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   vence_en DATE NULL,
@@ -66,16 +72,32 @@ CREATE TABLE bloqueos (
   CONSTRAINT fk_bloqueos_admin FOREIGN KEY (administrador_id) REFERENCES usuarios(id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE programas (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  codigo VARCHAR(40) NOT NULL UNIQUE,
+  nombre VARCHAR(150) NOT NULL,
+  nivel ENUM('tecnico','tecnologo') NOT NULL,
+  duracion_trimestres SMALLINT UNSIGNED NOT NULL,
+  estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+  creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT chk_programas_duracion CHECK (duracion_trimestres > 0),
+  INDEX idx_programas_estado_nombre (estado, nombre)
+) ENGINE=InnoDB;
+
 CREATE TABLE fichas (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   codigo CHAR(7) CHARACTER SET ascii COLLATE ascii_bin NOT NULL UNIQUE,
+  programa_id BIGINT UNSIGNED NULL,
   nombre VARCHAR(150) NOT NULL,
   programa VARCHAR(150) NOT NULL DEFAULT '',
   trimestre TINYINT UNSIGNED NULL,
   fecha_inicio DATE NULL,
   fecha_fin DATE NULL,
   estado ENUM('activa','finalizada','suspendida') NOT NULL DEFAULT 'activa',
-  CONSTRAINT chk_fichas_codigo CHECK (codigo REGEXP '^[0-9]{7}$')
+  CONSTRAINT chk_fichas_codigo CHECK (codigo REGEXP '^[0-9]{7}$'),
+  CONSTRAINT fk_fichas_programa FOREIGN KEY (programa_id) REFERENCES programas(id) ON DELETE RESTRICT,
+  INDEX idx_fichas_programa (programa_id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE fichas_usuarios (
@@ -109,6 +131,42 @@ CREATE TABLE ambientes (
   descripcion TEXT NULL
 ) ENGINE=InnoDB;
 
+CREATE TABLE competencias (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  codigo VARCHAR(40) NOT NULL UNIQUE,
+  nombre VARCHAR(180) NOT NULL,
+  programa_id BIGINT UNSIGNED NOT NULL,
+  estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+  creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_competencias_programa FOREIGN KEY (programa_id) REFERENCES programas(id) ON DELETE RESTRICT,
+  INDEX idx_competencias_programa_estado (programa_id, estado)
+) ENGINE=InnoDB;
+
+CREATE TABLE resultados_aprendizaje (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  codigo VARCHAR(40) NOT NULL UNIQUE,
+  descripcion VARCHAR(500) NOT NULL,
+  competencia_id BIGINT UNSIGNED NOT NULL,
+  estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+  creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_resultados_competencia FOREIGN KEY (competencia_id) REFERENCES competencias(id) ON DELETE RESTRICT,
+  INDEX idx_resultados_competencia_estado (competencia_id, estado)
+) ENGINE=InnoDB;
+
+CREATE TABLE calendario_academico (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  fecha DATE NOT NULL,
+  tipo ENUM('festivo','vacaciones') NOT NULL,
+  descripcion VARCHAR(250) NOT NULL,
+  estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+  creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_calendario_fecha_tipo (fecha, tipo),
+  INDEX idx_calendario_fecha_estado (fecha, estado)
+) ENGINE=InnoDB;
+
 CREATE TABLE mantenimientos (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   ambiente_id BIGINT UNSIGNED NOT NULL,
@@ -125,6 +183,7 @@ CREATE TABLE mantenimientos (
 CREATE TABLE horarios (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   ficha_id BIGINT UNSIGNED NOT NULL,
+  competencia_id BIGINT UNSIGNED NULL,
   ambiente_id BIGINT UNSIGNED NOT NULL,
   instructor_id BIGINT UNSIGNED NOT NULL,
   dia_semana TINYINT UNSIGNED NOT NULL,
@@ -134,9 +193,11 @@ CREATE TABLE horarios (
   CONSTRAINT chk_horarios_dia CHECK (dia_semana BETWEEN 1 AND 7),
   CONSTRAINT chk_horarios_horas CHECK (hora_inicio < hora_fin),
   CONSTRAINT fk_horarios_ficha FOREIGN KEY (ficha_id) REFERENCES fichas(id),
+  CONSTRAINT fk_horarios_competencia FOREIGN KEY (competencia_id) REFERENCES competencias(id) ON DELETE RESTRICT,
   CONSTRAINT fk_horarios_ambiente FOREIGN KEY (ambiente_id) REFERENCES ambientes(id),
   CONSTRAINT fk_horarios_instructor FOREIGN KEY (instructor_id) REFERENCES usuarios(id),
-  INDEX idx_horarios_busqueda (dia_semana, hora_inicio, hora_fin)
+  INDEX idx_horarios_busqueda (dia_semana, hora_inicio, hora_fin),
+  INDEX idx_horarios_competencia (competencia_id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE reservas (
@@ -177,11 +238,17 @@ CREATE TABLE novedades (
   asistencia_id BIGINT UNSIGNED NULL,
   tipo ENUM('retraso','permiso','inasistencia','otra') NOT NULL,
   descripcion VARCHAR(500) NOT NULL,
+  estado_excusa ENUM('pendiente','aprobada','rechazada') NULL,
+  soporte_ruta VARCHAR(255) NULL,
   fecha DATE NOT NULL,
   registrado_por BIGINT UNSIGNED NOT NULL,
+  revisado_por BIGINT UNSIGNED NULL,
+  revisado_en DATETIME NULL,
+  INDEX idx_novedades_excusa_aprendiz (usuario_id, tipo, estado_excusa),
   CONSTRAINT fk_novedades_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
   CONSTRAINT fk_novedades_asistencia FOREIGN KEY (asistencia_id) REFERENCES asistencias(id) ON DELETE SET NULL,
-  CONSTRAINT fk_novedades_registrador FOREIGN KEY (registrado_por) REFERENCES usuarios(id)
+  CONSTRAINT fk_novedades_registrador FOREIGN KEY (registrado_por) REFERENCES usuarios(id),
+  CONSTRAINT fk_novedades_revisor FOREIGN KEY (revisado_por) REFERENCES usuarios(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE accesos (
@@ -275,10 +342,26 @@ CREATE TABLE notificaciones (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   usuario_id BIGINT UNSIGNED NOT NULL,
   titulo VARCHAR(150) NOT NULL,
+  tipo ENUM('asistencia','excusa','formacion','sistema') NULL,
+  remitente_id BIGINT UNSIGNED NULL,
   mensaje TEXT NOT NULL,
   leida_en DATETIME NULL,
   creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_notificaciones_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+  CONSTRAINT fk_notificaciones_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+  CONSTRAINT fk_notificaciones_remitente FOREIGN KEY (remitente_id) REFERENCES usuarios(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE juicios_resultados (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  estudiante_id BIGINT UNSIGNED NOT NULL,
+  resultado_id BIGINT UNSIGNED NOT NULL,
+  juicio ENUM('aprobado','no_aprobado','por_evaluar') NOT NULL DEFAULT 'por_evaluar',
+  evaluado_por BIGINT UNSIGNED NOT NULL,
+  evaluado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_juicios_estudiante_resultado (estudiante_id, resultado_id, evaluado_en),
+  CONSTRAINT fk_juicios_estudiante FOREIGN KEY (estudiante_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+  CONSTRAINT fk_juicios_resultado FOREIGN KEY (resultado_id) REFERENCES resultados_aprendizaje(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_juicios_evaluador FOREIGN KEY (evaluado_por) REFERENCES usuarios(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
 CREATE TABLE auditoria (
@@ -291,6 +374,14 @@ CREATE TABLE auditoria (
   fecha_hora TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_auditoria_fecha (fecha_hora),
   CONSTRAINT fk_auditoria_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE configuracion_sistema (
+  clave VARCHAR(80) PRIMARY KEY,
+  valor SMALLINT UNSIGNED NOT NULL,
+  actualizado_por BIGINT UNSIGNED NULL,
+  actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_configuracion_sistema_usuario FOREIGN KEY (actualizado_por) REFERENCES usuarios(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE recuperacion_password (
@@ -318,6 +409,14 @@ INSERT INTO roles (id, nombre, descripcion) VALUES
   (2,'instructor','Asistencia, horarios y novedades'),
   (3,'estudiante','Consulta de horario, asistencia y carnet'),
   (4,'portero','Accesos, visitantes y equipos');
+
+INSERT INTO configuracion_sistema (clave, valor) VALUES
+  ('asistencia_alerta_amarilla', 90),
+  ('asistencia_alerta_roja', 80),
+  ('dias_habiles_excusa', 3),
+  ('horas_correccion_asistencia', 48),
+  ('pin_intentos_maximos', 3),
+  ('pin_bloqueo_minutos', 5);
 
 -- Usuarios de demostracion: la contrasena para todos es "password".
 INSERT INTO usuarios (id, rol_id, documento, nombres, apellidos, correo, password_hash) VALUES

@@ -31,6 +31,26 @@ Para instrucciones de uso paso a paso, consulta el [Manual de uso](MANUAL_DE_USO
    pendientes en `database/migrations/`; estas actualizaciones conservan las
    tablas y los demás datos existentes. Antes de importar una migración,
    genera un respaldo completo de la base.
+   Para habilitar el tipo de documento, la aceptación de tratamiento de datos y
+   el acceso con PIN del carné en una base existente, ejecuta una sola vez
+   `database/migrations/006_registro_pin_carnet.sql`.
+   Para agregar la configuración institucional y la bitácora de auditoría,
+   ejecuta una sola vez `database/migrations/007_configuracion_administrador.sql`.
+   Para agregar programas, competencias, resultados de aprendizaje y calendario,
+   respalda primero la base y ejecuta una sola vez
+   `database/migrations/008_base_academica_calendario.sql`. La migración crea
+   catálogos aditivos, enlaza las fichas con los programas que ya estaban en su
+   campo de texto y conserva las columnas y registros anteriores. Los programas
+   heredados reciben nivel técnico y duración inicial de seis trimestres, que
+   administración puede editar. Los horarios existentes quedan sin competencia
+   hasta que se les asigne una desde el módulo **Horarios**.
+   Para habilitar las excusas con soporte, las notificaciones tipadas y los
+   juicios evaluativos, respalda primero la base y ejecuta una sola vez
+   `database/migrations/009_modulo_aprendiz.sql`, después de las migraciones
+   anteriores. La migración conserva los registros existentes y crea la tabla
+   de historial evaluativo. Los soportes de excusa se guardan en
+   `api/uploads/excuses/`; el acceso directo al directorio está bloqueado y los
+   archivos se sirven solo mediante rutas autenticadas.
    Para aplicar la formación y asistencia por clase, respalda primero la base,
    selecciona `proyecto01` en phpMyAdmin y ejecuta una sola vez
    `database/migrations/002_formacion_asistencia_por_clase.sql`.
@@ -144,25 +164,67 @@ Allí también puede revisar la ocupación semanal de los ambientes. La disponib
 vigentes; los detalles de asignatura, ficha e instructor solo se muestran para
 las fichas asignadas al instructor.
 
-Las personas ingresan documento, teléfono, nombres, apellidos, correo
-electrónico y contraseña. Pueden agregar una foto propia opcional para el carné
-(JPG, PNG o WEBP, máximo 1 MB). Al terminar se genera un carné QR descargable
-como PNG. Los estudiantes quedan activos; las solicitudes de instructores y
+El plazo institucional para corregir asistencia se cuenta desde su registro
+original. Los instructores pueden editar o eliminar dentro de ese plazo;
+administración conserva la facultad de corregir después del vencimiento. Las
+excusas se registran como novedades de tipo `inasistencia`, vinculadas a una
+asistencia ausente del mismo aprendiz y fecha. Se aceptan dentro de los días
+hábiles configurados: se cuentan lunes a viernes y se excluyen las fechas
+activas de tipo festivo o vacaciones registradas en **Calendario académico**.
+
+Las personas ingresan tipo y número de documento, teléfono, nombres, apellidos,
+correo electrónico, contraseña y un PIN de 4 a 6 números. También aceptan el
+tratamiento de datos personales. Pueden agregar una foto propia opcional para
+el carné (JPG, PNG o WEBP, máximo 1 MB). Al terminar se genera un carné QR
+descargable como PNG. Los estudiantes quedan activos; las solicitudes de instructores y
 portería necesitan aprobación en **Solicitudes de registro**. El registro
 público no permite crear administradores: los crea un administrador ya
 autenticado y no requiere confirmar el correo electrónico.
 
-Estudiantes, instructores, portería y administradores inician sesión escaneando
-el QR de su carné o eligiendo una imagen que lo contenga. La cámara requiere
-permiso del navegador y que el sitio se abra desde `localhost` o HTTPS. El QR
-es una credencial de acceso: no lo publiques ni compartas; cualquier persona
-con una copia puede entrar a la cuenta. En el panel, el botón **Mi carné QR**
-permite volver a descargar el carné. Las cuentas existentes pueden usar el
-acceso temporal con correo y contraseña para obtener su primer carné; después
-de descargarlo, el acceso con contraseña queda deshabilitado para esa cuenta.
+Estudiantes, instructores, portería y administradores pueden iniciar sesión
+con correo o documento y contraseña, o escanear el QR del carné e ingresar el
+PIN. El PIN se guarda como hash; tres intentos fallidos bloquean el acceso con
+QR durante cinco minutos. La cámara requiere permiso del navegador y que el
+sitio se abra desde `localhost` o HTTPS. El QR por sí solo no permite entrar,
+pero contiene datos del carné: no lo publiques ni compartas. En el panel, el
+botón **Mi carné QR** permite volver a descargarlo. Las cuentas existentes
+pueden configurar su PIN desde el ingreso con documento o correo y contraseña.
 El listado y el panel de administración se actualizan automáticamente cada 3
 segundos desde la misma base de datos. Si la cámara o el lector no están
 disponibles, se puede escribir el documento manualmente.
+
+## Fase 2: portal del aprendiz
+
+El rol estudiante inicia en **Inicio**, donde consulta su ficha, programa,
+trimestre, porcentaje de asistencia con umbrales de alerta, notificaciones sin
+leer y las clases del día. **Horarios** tiene vistas diaria y semanal;
+**Asistencia** muestra los detalles de cada sesión y permite presentar una
+excusa para una falta dentro del plazo hábil, con soporte PDF o imagen de hasta
+5 MB. El estado de la excusa se muestra en **Mis excusas**. Administración y
+los instructores asignados revisan las solicitudes desde **Excusas**.
+
+**Notificaciones** muestra tipo, remitente y mensaje y permite marcarlas como
+leídas. **Mi formación** presenta competencias, resultados y el último juicio
+evaluativo, y permite descargar el historial en PDF. Administración e
+instructores registran juicios desde **Juicios evaluativos**; el instructor
+solo puede evaluar aprendices y resultados de sus fichas/programas asignados.
+El aprendiz también puede consultar **Mi carné** y cambiar solo correo,
+celular, contraseña y PIN desde **Mi perfil**. Los cambios de contraseña o PIN
+requieren confirmar la contraseña actual.
+
+Las rutas del portal aprendiz derivan el usuario de la sesión y no aceptan un
+ID de aprendiz indicado por el navegador como autoridad. Para probar el
+aislamiento, inicia sesión con una cuenta estudiante e intenta solicitar el
+perfil, asistencia o archivos de otro ID: la API no devuelve datos ajenos.
+
+Prueba de extremo a extremo: crea o selecciona un programa, competencia,
+resultado de aprendizaje y ficha con horario; inscribe una cuenta de estudiante
+y asigna un instructor a la ficha. Entra como estudiante para comprobar Inicio,
+horario, carné y porcentaje; con una cuenta autorizada registra una falta de
+prueba y vuelve a entrar como estudiante para enviar la excusa con soporte.
+Entra como instructor asignado para revisar la excusa y registrar un juicio.
+Verifica que el aprendiz reciba la notificación y pueda descargar el historial
+PDF.
 
 Cuenta administradora inicial (la contraseña temporal es `password`):
 
@@ -170,9 +232,9 @@ Cuenta administradora inicial (la contraseña temporal es `password`):
 |---|---|
 | Administrador | `mauriciomedinacamacho5@gmail.com` |
 
-En una instalación nueva o para cuentas existentes sin carné, usa el acceso
-temporal con correo y contraseña una vez para abrir el panel y descargar el
-carné QR. Después inicia sesión escaneando el carné.
+En una instalación nueva o para cuentas existentes, ingresa con documento o
+correo y contraseña. Si una cuenta anterior todavía no tiene PIN, puede
+configurarlo desde ese formulario para habilitar su acceso QR.
 
 Otras cuentas de demostración (la contraseña de ambas es `password`):
 
@@ -247,6 +309,29 @@ con permisos suficientes para acceder a MySQL. Si la instalación protege la
 cuenta de MySQL con contraseña, configura un archivo de opciones de cliente
 protegido y adapta el comando `mysqldump`; no guardes la contraseña en el script.
 
+### Vaciar datos y recrear la cuenta administradora
+
+El procedimiento destructivo `backups\reiniciar_base_y_crear_administrador.ps1`
+comprueba que exista un dump reciente y completo, muestra las tablas, cantidades
+de registros, fotos y soportes de excusas que afectará, y exige escribir `BORRAR TODO proyecto01`
+antes de continuar. Después solicita en la terminal, sin mostrarlos, la
+contraseña y el PIN nuevos. Guarda ambos mediante hashes de verificación
+(`password_hash`), no como texto recuperable.
+
+Ejecuta PowerShell desde la carpeta del proyecto:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\backups\reiniciar_base_y_crear_administrador.ps1" -BackupPath ".\backups\proyecto01_full_before_reset_FECHA.sql"
+```
+
+El script conserva el esquema, los roles y las migraciones; restablece la
+configuración institucional a sus valores predeterminados, limpia las tablas
+de registros, las fotos de `api\uploads\profiles` y los soportes de
+`api\uploads\excuses`, reinicia los contadores y crea una cuenta administradora
+con carné QR. No borra imágenes ni recursos propios del portal. Revisa
+cuidadosamente la lista que presenta; si cancelas o no escribes la frase exacta,
+no modifica la base ni los archivos.
+
 ## Aplicación Android
 
 El API acepta por defecto `http://192.168.1.10/gestion/api`. En la red local,
@@ -262,20 +347,24 @@ Reemplaza `192.168.1.25` por la IP real del PC. Para abrir en Android Studio,
 usa la carpeta `app_movil`. Android permite HTTP sin cifrar para desarrollo en
 LAN; no expongas esta configuración a Internet.
 
-La aplicación móvil incluye inicio de sesión con QR para todos los roles,
+La aplicación móvil incluye inicio de sesión con QR y PIN o documento/correo y
+contraseña para todos los roles,
 consulta de indicadores, horarios/asistencia y carné QR para estudiantes, además
 del escaneo de carnets para registrar ingresos o salidas y el escaneo encadenado
 de equipo y responsable para validar su salida. El panel móvil también refresca cada 8 s.
 
 ## API principal
 
-Todas las rutas están bajo `/gestion/api/`, reciben/devuelven JSON salvo las
-descargas de reportes y requieren una sesión para operaciones autenticadas.
-El endpoint `/health` sirve para comprobar el servicio.
+Todas las rutas están bajo `/gestion/api/` y reciben/devuelven JSON salvo las
+descargas de reportes. Las operaciones autenticadas requieren una sesión; la
+vista previa del carné está limitada al nombre y la foto para confirmar la
+identidad antes de solicitar el PIN. El endpoint `/health` sirve para comprobar
+el servicio.
 
-- `POST /auth/qr-login`, `GET /auth/card`, `POST /auth/card-issued`,
+- `POST /auth/qr-preview`, `POST /auth/qr-login` (QR y PIN),
+  `GET /auth/card`, `POST /auth/card-issued`,
   `POST /auth/register` (estudiantes y solicitudes de personal),
-  `POST /auth/login` (acceso temporal para obtener el carné de cuentas existentes),
+  `POST /auth/login` (correo/documento y contraseña; permite configurar el PIN),
   `POST /auth/logout`, `GET /auth/me`
 - `POST /auth/recovery`, `POST /auth/reset-password`
 - `GET /dashboard`, `GET /attendance/alerts`, `POST /attendance/mark`

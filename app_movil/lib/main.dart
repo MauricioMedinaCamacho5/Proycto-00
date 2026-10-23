@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
@@ -238,7 +240,11 @@ class _LoginPageState extends State<LoginPage> {
   );
   bool _busy = false;
   bool _scanning = false;
+  bool _showPasswordLogin = false;
   String? _error;
+  final _identifierController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _pinController = TextEditingController();
 
   Future<void> _loginWithQr(String code) async {
     if (_busy) return;
@@ -248,7 +254,117 @@ class _LoginPageState extends State<LoginPage> {
       _error = null;
     });
     try {
-      final user = await _api.post('auth/qr-login', {'codigo_qr': code});
+      final preview = await _api.post('auth/qr-preview', {'codigo_qr': code});
+      final profile = Map<String, dynamic>.from(preview['usuario'] as Map);
+      final pin = await _requestPin(profile);
+      if (pin == null) return;
+      final user = await _api.post(
+        'auth/qr-login',
+        {'codigo_qr': code, 'pin': pin},
+      );
+      if (!mounted) return;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => HomePage(api: _api, user: user),
+        ),
+      );
+    } on DioException catch (error) {
+      setState(() => _error =
+          error.response?.data?['error']?.toString() ?? 'No se pudo conectar.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<String?> _requestPin(Map<String, dynamic> profile) async {
+    final controller = TextEditingController();
+    String? validationError;
+    final photo = profile['foto']?.toString() ?? '';
+    final photoMatch = RegExp(r'^data:image/[^;]+;base64,(.+)$').firstMatch(photo);
+    Uint8List? photoBytes;
+    if (photoMatch != null) {
+      try {
+        photoBytes = base64Decode(photoMatch.group(1)!);
+      } on FormatException {
+        photoBytes = null;
+      }
+    }
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Column(
+              children: [
+                if (photoBytes != null)
+                  CircleAvatar(
+                    radius: 34,
+                    backgroundImage: MemoryImage(photoBytes),
+                  ),
+                const SizedBox(height: 10),
+                Text(
+                  '${profile['nombres']} ${profile['apellidos']}',
+                  textAlign: TextAlign.center,
+                ),
+                Text(
+                  'Confirma que la foto y el nombre sean tuyos.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+            content: TextField(
+              controller: controller,
+              autofocus: true,
+              obscureText: true,
+              maxLength: 6,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'PIN del carné',
+                errorText: validationError,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancelar'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final value = controller.text.trim();
+                  if (!RegExp(r'^\d{4,6}$').hasMatch(value)) {
+                    setDialogState(() {
+                      validationError = 'Ingresa de 4 a 6 números.';
+                    });
+                    return;
+                  }
+                  Navigator.pop(dialogContext, value);
+                },
+                child: const Text('Ingresar'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _loginWithPassword() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final data = <String, dynamic>{
+        'identificador': _identifierController.text.trim(),
+        'password': _passwordController.text,
+      };
+      if (_pinController.text.isNotEmpty) {
+        data['pin'] = _pinController.text;
+      }
+      final user = await _api.post('auth/login', data);
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
@@ -266,6 +382,9 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void dispose() {
     _scannerController.dispose();
+    _identifierController.dispose();
+    _passwordController.dispose();
+    _pinController.dispose();
     super.dispose();
   }
 
@@ -288,7 +407,7 @@ class _LoginPageState extends State<LoginPage> {
                         style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 18),
                     const Text(
-                      'Escanea el QR de tu carné para ingresar. Cualquier persona con una copia puede acceder a tu cuenta.',
+                      'Escanea el QR de tu carné e ingresa tu PIN. También puedes usar tu documento o correo y contraseña.',
                     ),
                     const SizedBox(height: 14),
                     if (_scanning)
@@ -309,14 +428,57 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                       ),
                     const SizedBox(height: 12),
-                    FilledButton.icon(
+                    if (!_showPasswordLogin)
+                      FilledButton.icon(
+                        onPressed: _busy
+                            ? null
+                            : () => setState(() => _scanning = !_scanning),
+                        icon: Icon(_scanning
+                            ? Icons.close
+                            : Icons.qr_code_scanner),
+                        label: Text(_scanning ? 'Cerrar cámara' : 'Escanear QR'),
+                      )
+                    else ...[
+                      TextField(
+                        controller: _identifierController,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'Documento o correo electrónico',
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _passwordController,
+                        obscureText: true,
+                        decoration:
+                            const InputDecoration(labelText: 'Contraseña'),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _pinController,
+                        obscureText: true,
+                        maxLength: 6,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'PIN opcional para configurar o cambiar',
+                        ),
+                      ),
+                      FilledButton(
+                        onPressed: _busy ? null : _loginWithPassword,
+                        child: const Text('Ingresar'),
+                      ),
+                    ],
+                    TextButton(
                       onPressed: _busy
                           ? null
-                          : () => setState(() => _scanning = !_scanning),
-                      icon: Icon(_scanning
-                          ? Icons.close
-                          : Icons.qr_code_scanner),
-                      label: Text(_scanning ? 'Cerrar cámara' : 'Escanear QR'),
+                          : () => setState(() {
+                                _showPasswordLogin = !_showPasswordLogin;
+                                _scanning = false;
+                                _error = null;
+                              }),
+                      child: Text(_showPasswordLogin
+                          ? 'Ingresar con carné QR'
+                          : 'Ingresar con documento o correo'),
                     ),
                     if (_error != null) ...[
                       const SizedBox(height: 12),
