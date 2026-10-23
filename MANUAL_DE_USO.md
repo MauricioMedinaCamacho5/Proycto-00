@@ -1,7 +1,8 @@
 # Manual de uso de Gestión Institucional
 
 Esta guía explica cómo abrir la página y cómo realizar las tareas habituales
-según el tipo de cuenta: administración, instructor, estudiante o portería.
+según el tipo de cuenta: administración, coordinación, instructor, estudiante o
+portería.
 
 ## 1. Abrir la página
 
@@ -29,8 +30,8 @@ según el tipo de cuenta: administración, instructor, estudiante o portería.
 5. Pulsa **Crear cuenta** y sigue el aviso que aparece. Las solicitudes de
    instructor y portería no tendrán acceso institucional hasta ser aprobadas.
 
-El registro público no permite crear cuentas de administrador. Administración
-puede crear esas cuentas desde el módulo **Usuarios**.
+El registro público no permite crear cuentas de administrador ni coordinador.
+Administración puede crear ambos tipos de cuenta desde el módulo **Usuarios**.
 
 ## 3. Iniciar sesión y usar el carné QR
 
@@ -62,8 +63,11 @@ En **Configuración institucional** puede ajustar los umbrales de alerta de
 asistencia, los plazos para excusas y correcciones, y los intentos y la duración
 del bloqueo del PIN. Los umbrales se reflejan en las alertas del panel; los
 intentos y minutos se aplican al ingreso con carné. El plazo de corrección se
-cuenta desde el registro original: los instructores pueden editar o eliminar
-asistencias dentro de ese límite y administración puede corregirlas después.
+cuenta desde el registro original: el instructor solicita la corrección dentro
+de ese límite y debe indicar un motivo; coordinación o administración la
+aprueba o rechaza. Administración puede corregirlas directamente incluso
+después del vencimiento. Las asistencias no se eliminan; cada corrección queda
+auditada.
 Para presentar una excusa, registra una **Novedad** de tipo `inasistencia` y
 selecciona la asistencia marcada como ausente del aprendiz. El plazo se cuenta
 de lunes a viernes y excluye las fechas activas de tipo festivo o vacaciones
@@ -140,8 +144,8 @@ para editarlo o eliminarlo.
 3. Revisa el porcentaje individual de cada aprendiz o pulsa **Ver historial**
    para consultar sus registros.
 4. En **Asistencia**, selecciona la ficha y marca el estado de cada aprendiz
-   para el día actual. Puedes agregar o editar el motivo/observación y corregir
-   o eliminar un registro.
+   para el día actual. Puedes agregar o editar el motivo/observación; los
+   registros no se eliminan.
 
 El porcentaje usa esta fórmula:
 **(presentes + retrasos) / (presentes + retrasos + faltas)**. Los permisos no
@@ -167,35 +171,70 @@ notas académicas.
 
 ## 5. Flujo del instructor
 
-1. Inicia sesión y abre **Progreso de estudiantes**.
-2. Pulsa el selector **Ficha asignada**. Se muestran las fichas activas que
-   administración le asignó; el menú presenta el programa, número y, cuando
-   existe, trimestre.
-3. Selecciona una ficha para ver únicamente sus aprendices.
-4. El resumen de la ficha muestra el porcentaje general de asistencia, el
-   gráfico circular, la barra de progreso y las cantidades de asistencias,
-   faltas, retrasos y permisos.
-5. En la lista, revisa el porcentaje individual de cada aprendiz. Para registrar
-   la asistencia del día, usa **Asistió**, **No asistió**, **Tarde** o
-   **Permiso**.
-6. Para añadir o corregir un motivo, usa **Agregar motivo** o **Editar /
-   motivo**. Para retirar un registro, usa **Eliminar** y confirma la acción.
-   Los instructores solo pueden corregir o eliminar dentro de las horas
-   configuradas desde el registro original; administración puede hacerlo
-   después del vencimiento.
-7. Para revisar la ocupación de espacios, pulsa **Disponibilidad semanal de
-   ambientes**. Usa **Volver a aprendices** para regresar a la lista.
+1. **Inicio** muestra las fichas activas asignadas, las clases del día y las
+   excusas pendientes. Usa los accesos del panel para abrir **Mis fichas** o
+   **Excusas**.
+2. En **Mis fichas**, selecciona una ficha asignada para consultar sus
+   aprendices, el porcentaje individual de asistencia y el resumen de presentes,
+   faltas, retrasos y permisos. El porcentaje excluye los permisos.
+3. Para registrar asistencia, selecciona la sesión cuando la ficha tenga más
+   de una clase ese día. Usa **Asistió**, **No asistió**, **Tarde** o
+   **Permiso**; cada registro requiere una observación y notifica al aprendiz.
+   También puedes pulsar **Escanear carné QR**, aceptar el permiso de cámara y
+   confirmar el estado y la observación del aprendiz identificado.
+4. Para corregir una asistencia existente, elige un estado, escribe la
+   observación y explica el motivo de la corrección. El plazo se cuenta desde el
+   registro original y se configura en **Configuración institucional**.
+   Las asistencias no se eliminan; cada corrección queda auditada y notifica al
+   aprendiz.
+5. **Excusas** muestra las solicitudes de aprendices de tus fichas. Para aprobar
+   o rechazar una pendiente, escribe una observación para el aprendiz. Aprobarla
+   cambia la falta a permiso y recalcula el porcentaje; el aprendiz recibe la
+   notificación de la decisión.
+6. **Juicios evaluativos** permite registrar aprobado, no aprobado o por evaluar
+   para los resultados de aprendizaje correspondientes a las fichas asignadas.
+   El aprendiz recibe una notificación.
+7. **Horarios** permite consultar y administrar los horarios de tus fichas.
+   Desde **Mis fichas**, pulsa **Disponibilidad semanal de ambientes** para ver
+   la ocupación semanal y usa **Volver a aprendices** para regresar.
+8. **Comunicados** permite seleccionar una ficha asignada y enviar un título y
+   mensaje a toda la ficha o a un aprendiz específico; cada destinatario recibe
+   una notificación.
+9. En **Mis fichas**, elige CSV, Excel o PDF y pulsa **Exportar aprendices en
+   riesgo** para descargar el informe de asistencia.
 
-El instructor no ve los accesos separados a **Asistencia** ni **Novedades**:
-registra la asistencia desde **Progreso de estudiantes**. Los datos y las
-acciones se limitan también desde el servidor a las fichas que tiene asignadas.
-Administración y los instructores asignados pueden registrar excusas en
-**Novedades**, con el tipo `inasistencia`, eligiendo una asistencia ausente del
-aprendiz. Debe presentarse dentro de los días hábiles configurados. Se excluyen
-sábados, domingos y las fechas activas de tipo festivo o vacaciones registradas
-en **Calendario académico**. Los soportes se revisan desde **Excusas**.
+El servidor verifica las fichas asignadas para las consultas y acciones del
+instructor. Para probar el acceso, intenta consultar una ficha no asignada:
+la API debe rechazarla. Las excusas se presentan por el aprendiz dentro de los
+días hábiles configurados; se excluyen sábados, domingos y las fechas activas
+de tipo festivo o vacaciones registradas en **Calendario académico**.
 
-## 6. Flujo del estudiante
+## 6. Sincronización y alertas automáticas
+
+- Cada registro o corrección de asistencia notifica al aprendiz, a los
+  instructores asignados y a administración con el estado, quién lo registró,
+  fecha y sesión.
+- El sistema genera alertas amarillas y rojas con los porcentajes configurados.
+  También genera una alerta roja al completar tres días consecutivos con falta
+  y sin excusa. Una alerta activa no se vuelve a enviar cada día; puede
+  notificarse de nuevo si el estado se recupera y luego vuelve a incumplir.
+- La tarea diaria envía un recordatorio un día hábil antes del vencimiento de la
+  excusa y, al vencerse el plazo configurado, marca la falta como injustificada
+  y notifica al aprendiz. Los días hábiles excluyen fines de semana y las fechas
+  activas del calendario académico.
+- Para probar la tarea sin escribir en la base:
+  `scripts\tarea_diaria.bat --dry-run`. Para ejecutarla manualmente:
+  `scripts\tarea_diaria.bat`. Puede programarse diariamente en el Programador
+  de tareas de Windows usando ese mismo archivo; configura `PHP_CLI` si `php.exe`
+  no está en PATH ni en la instalación de XAMPP. Si MySQL usa credenciales
+  distintas a las predeterminadas, define las variables `DB_HOST`, `DB_NAME`,
+  `DB_USER` y `DB_PASSWORD` para la cuenta de Windows de la tarea. La ejecución
+  usa un bloqueo para impedir dos tareas simultáneas.
+- Las notificaciones de juicios, excusas, cambios de horario y comunicados
+  describen quién realizó la acción, qué ocurrió, la fecha y la sesión
+  correspondiente (o indican cuando no aplica).
+
+## 7. Flujo del estudiante
 
 1. **Inicio** muestra el nombre, ficha, programa, trimestre, porcentaje de
    asistencia, alertas institucionales, notificaciones sin leer y clases del
@@ -223,24 +262,53 @@ los datos personales por esa identidad. No se aceptan IDs enviados por la
 pantalla para consultar información de otro aprendiz ni para usar funciones de
 instructor.
 
-## 7. Flujo de portería
+## 8. Flujo de portería
 
-- **Accesos**: registra ingresos y salidas de personas mediante el QR, o
-  buscando la cuenta según las opciones del formulario.
-- **Visitantes**: registra los datos de la visita y su motivo.
-- **Inventario**: consulta y registra equipos con su serial, categoría, estado
-  y ubicación.
-- **Movimientos de equipos**: registra movimientos y responsables de los
-  equipos.
-- **Préstamos**: registra la entrega de un equipo y su devolución.
-- **Permisos temporales**: registra el periodo autorizado y el motivo para una
-  persona o visitante.
+En una base existente, crea primero un respaldo y aplica una sola vez
+`database/migrations/014_tablet_equipos.sql` para habilitar la opción **Tablet**.
 
-Los nombres de campos pueden variar según el tipo de registro. Completa los
-datos solicitados y guarda; si el servidor rechaza un dato, mostrará el motivo
-para que puedas corregirlo.
+1. Como aprendiz o instructor, abre **Mis equipos** y registra una vez cada
+   portátil, tablet, teclado, mouse, maleta u otro equipo con tipo, nombre, serial,
+   marca, color y foto opcional. Puedes editarlo o desactivarlo; el serial debe
+   ser único. Marca los equipos que llevas y pulsa **Generar QR de ingreso
+   de hoy**. El código es diario; genera uno nuevo si cambias la lista.
+2. En **Ingreso de equipos**, escanea el QR diario o el QR del carné con el
+   lector conectado (también puedes escribir el código en el campo). Revisa
+   foto, nombre, documento, ficha o rol, estado del carné y la foto/serial de
+   cada equipo. Si el
+   carné está bloqueado o vencido, la confirmación queda deshabilitada.
+3. Confirma el ingreso. Para salir, vuelve a escanear y compara la lista de
+   equipos con lo que lleva la persona; desmarca cualquier equipo que no salga.
+   El servidor registra entrada/salida, conserva la auditoría y genera una
+   alerta a administración si las listas no coinciden.
+4. Para una visita, registra documento, nombre, entidad y motivo; entrega el
+   QR temporal generado. Registra sus equipos con el ID de visitante. Escanea
+   ese QR para dejar constancia de entrada y salida.
+5. Para prestar una llave, indica el ID del ambiente y escanea el carné del
+   instructor. El servidor solo autoriza si tiene clase o reserva activa para
+   ese ambiente. Registra la devolución con el ID del préstamo y el QR del
+   instructor. El plazo está en **Configuración institucional**; la tarea diaria
+   avisa de llaves vencidas a portería y administración.
+6. Usa **Novedad de turno** para registrar hechos y a quién se entrega el turno.
+   Usa **Objeto perdido** para registrar el objeto y su ubicación.
+7. Administración abre **Panel de portería** para consultar accesos, equipos,
+   llaves, visitantes, novedades y objetos; filtra por fecha, persona, ficha,
+   ambiente o serial y exporta el reporte en PDF o Excel.
 
-## 8. Recuperar contraseña
+El servidor permite al rol de portería consultar únicamente las superficies de
+operación: identidad mínima, ficha/rol, estado del carné, equipos, ambientes,
+llaves, visitantes, novedades y objetos. Las rutas genéricas de asistencia,
+excusas, juicios, notificaciones y datos personales no están habilitadas para
+ese rol.
+
+**Prueba rápida:** usa el portátil de prueba de Laura o Catalina, o registra un
+portátil y un mouse en **Mis equipos**; genera
+el QR diario y confirma la entrada en portería. Al salir, desmarca un equipo
+para comprobar la alerta; presta una llave a un instructor con clase y prueba
+con otro que no tenga clase ni reserva; finalmente revisa el historial y la
+exportación en la cuenta administradora.
+
+## 9. Recuperar contraseña
 
 1. En la pantalla de acceso, abre **Olvidé mi contraseña**.
 2. Escribe el correo asociado a la cuenta y envía la solicitud.
@@ -252,14 +320,14 @@ El envío requiere una cuenta remitente de Gmail o Outlook/Hotmail con SMTP
 configurado en Apache. Si no llega el mensaje, pide al administrador que revise
 la configuración SMTP y que el servidor de correo permita el envío.
 
-## 9. Actualización de la información
+## 10. Actualización de la información
 
 La página consulta la API y la base de datos del servidor. El panel y los
 listados se actualizan automáticamente; también puedes pulsar **Actualizar
 lista** cuando ese botón aparezca. Los cambios que guardes se reflejan en la
 base de datos conectada a esa instalación.
 
-## 10. Si algo no funciona
+## 11. Si algo no funciona
 
 - **No abre o aparece error del servidor**: comprueba que Apache y MySQL estén
   iniciados y visita `http://localhost/gestion/api/health`.
@@ -281,7 +349,7 @@ base de datos conectada a esa instalación.
 - **El menú no muestra una opción**: las opciones disponibles dependen del rol
   de la cuenta; pide a administración que verifique que el rol sea correcto.
 
-## 11. Privacidad y cuidado de los datos
+## 12. Privacidad y cuidado de los datos
 
 - No compartas el carné QR: aunque requiere el PIN, muestra datos personales.
 - Cierra sesión si utilizas un computador compartido.
@@ -289,3 +357,73 @@ base de datos conectada a esa instalación.
   información real.
 - Antes de cambiar una base de datos existente, genera un respaldo. No importes
   el archivo de creación completa sobre una base que quieras conservar.
+
+## 13. Cierre administrativo y etapa productiva
+
+La migración `database/migrations/012_cierre_productiva_coordinador.sql` debe
+aplicarse una sola vez y después de crear un respaldo completo. Administración
+crea cuentas coordinador desde **Usuarios**. El coordinador ve **Reportes
+generales**, el historial de cierres y las solicitudes de corrección; no puede
+abrir **Configuración institucional** ni las operaciones de portería.
+
+### Cierre de trimestre
+
+1. En **Cierre de trimestre**, administración elige una ficha activa y pulsa
+   **Cerrar trimestre**.
+2. El sistema guarda el resumen de asistencia y juicios hasta la fecha, registra
+   quién hizo el cierre y aumenta el trimestre de la ficha. Al alcanzar la
+   duración definida en el programa, finaliza la ficha.
+3. El coordinador puede consultar el historial, pero no ejecutar cierres. Los
+   cierres quedan registrados en **Auditoría** y no se pueden repetir para la
+   misma ficha y trimestre.
+
+### Etapa productiva
+
+1. Administración crea la etapa para un aprendiz inscrito en una ficha, elige
+   una alternativa, registra la empresa y selecciona un instructor asignado a
+   esa ficha.
+2. El aprendiz y el instructor de seguimiento consultan la etapa. Pueden abrir
+   su bitácora y agregar entradas; el aprendiz recibe una notificación cuando
+   se registra información nueva. Administración puede finalizar la etapa.
+
+### Coordinación y carnets
+
+1. El instructor solicita una corrección desde la lista de asistencia dentro
+   del plazo institucional y explica el motivo. La asistencia no cambia hasta
+   que el coordinador o administración la aprueba.
+2. En **Correcciones de asistencia**, el revisor aprueba o rechaza la solicitud
+   con una respuesta. La decisión se notifica al aprendiz y queda en auditoría.
+3. En **Carnets digitales**, administración puede abrir y descargar un carné,
+   regenerar su QR (invalida el anterior y restablece el PIN) o desactivarlo.
+   Un carné desactivado no autentica ni se acepta en portería.
+
+**Prueba rápida:** crea un usuario coordinador desde **Usuarios** y comprueba
+que puede abrir **Reportes generales** y **Correcciones de asistencia**, pero
+recibe acceso denegado al intentar abrir `api/settings`. Crea una ficha activa
+con programa y duración, ciérrala y verifica el aumento de trimestre y el
+resumen. Registra una etapa productiva y una bitácora; verifica la notificación
+del aprendiz y la auditoría. Genera otro carné de prueba, desactívalo y prueba
+que su QR ya no valida; luego regénéralo y comprueba que solo el QR nuevo es
+válido.
+
+## 14. Datos de prueba
+
+Los datos ficticios de programas, fichas, ambientes, competencias, usuarios,
+horarios y calendario se cargan desde scripts separados; las cuentas de prueba
+usan correos `@prueba.com`. No ejecutes el seed en una base con esos códigos,
+documentos o correos ya registrados.
+
+1. Inicia MySQL y crea un respaldo completo ejecutando
+   `backups\respaldo_diario.bat`. Conserva el archivo generado antes de continuar.
+2. En phpMyAdmin, selecciona `proyecto01` y ejecuta una sola vez
+   `database/migrations/013_jornada_fichas.sql`.
+3. Desde la carpeta del proyecto, ejecuta
+   `C:\xampp\php\php.exe scripts\cargar_datos_prueba.php` (usa la ruta de PHP
+   de tu instalación). El script muestra el total de registros en cada tabla
+   incluida. Las contraseñas y PIN se almacenan mediante `password_hash`; cada
+   cuenta de prueba tiene un carné QR.
+4. Para eliminar los datos creados por el seed, ejecuta
+   `C:\xampp\php\php.exe scripts\eliminar_datos_prueba.php`. La limpieza se
+   limita a los IDs marcados por el script y protege las cuentas administrativas.
+   Si otros registros ya dependen de los datos de prueba, la operación falla y
+   revierte la transacción; revisa esas dependencias antes de volver a intentar.

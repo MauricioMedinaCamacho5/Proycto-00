@@ -51,6 +51,68 @@ Para instrucciones de uso paso a paso, consulta el [Manual de uso](MANUAL_DE_USO
    de historial evaluativo. Los soportes de excusa se guardan en
    `api/uploads/excuses/`; el acceso directo al directorio está bloqueado y los
    archivos se sirven solo mediante rutas autenticadas.
+   El módulo instructor usa las migraciones 007, 008 y 009 ya descritas;
+   consulta la sección siguiente para la migración de sincronización y alertas.
+   Incluye panel de fichas asignadas, control de asistencia por sesión y QR,
+   revisión auditada de excusas, juicios, comunicados y reportes de riesgo
+   exportables. Los permisos de instructor se comprueban en la API para cada
+   ficha asignada.
+   Para registrar faltas injustificadas y evitar alertas automáticas duplicadas,
+   respalda primero la base y ejecuta una sola vez
+   `database/migrations/010_sincronizacion_alertas.sql`, después de las
+   migraciones anteriores. La tarea diaria usa los umbrales y días hábiles de
+   **Configuración institucional** y el calendario académico activo.
+   Puedes probarla sin guardar cambios con
+   `scripts\tarea_diaria.bat --dry-run` o ejecutarla manualmente con
+   `scripts\tarea_diaria.bat`. En el Programador de tareas de Windows, crea una
+   tarea diaria cuyo programa sea la ruta completa a `scripts\tarea_diaria.bat`;
+   si PHP no está en PATH ni en XAMPP, define `PHP_CLI` con la ruta a
+   `php.exe`. Si la base usa credenciales no predeterminadas, define también
+   `DB_HOST`, `DB_NAME`, `DB_USER` y `DB_PASSWORD` para la cuenta de Windows
+   que ejecuta la tarea. Consulta el resultado en el historial del Programador
+   de tareas.
+   Para activar la portería conectada, crea un respaldo completo y ejecuta una
+   sola vez `database/migrations/011_porteria_conectada.sql`. Agrega el
+   registro diario de QR y equipos, propietarios de equipos, llaves de
+   ambientes, novedades de turno y objetos perdidos. Configura el tiempo máximo
+   de devolución de llaves en **Configuración institucional**; la misma tarea
+   diaria marca préstamos vencidos, notifica a portería y administración y
+   evita duplicados. El rol de portería usa **Ingreso de equipos**; aprendices
+   e instructores registran, editan y desactivan sus equipos desde **Mis equipos**.
+   Los equipos admiten portátil, tablet y otros tipos. Administración
+   consulta el **Panel de portería** y puede exportar su historial a PDF o Excel.
+   El filtro del panel y del reporte incluye el serial. Para permitir equipos
+   tipo tablet, crea primero un respaldo y aplica una sola vez
+   `database/migrations/014_tablet_equipos.sql`.
+   Para completar el cierre administrativo, respalda la base y ejecuta una sola
+   vez `database/migrations/012_cierre_productiva_coordinador.sql`. La migración
+   agrega el rol coordinador, el estado activo/desactivado del carné, los cierres
+   de trimestre, las etapas productivas y sus bitácoras, y las solicitudes de
+   corrección que requieren aprobación. Administración puede consultar y
+   descargar carnets, regenerar su QR o desactivarlos; el QR desactivado deja de
+   validar. El panel incluye indicadores académicos, de asistencia, alertas y
+   portería. **Cierre de trimestre** guarda el resumen y avanza la ficha según la
+   duración de su programa; **Etapa productiva** registra empresa, alternativa,
+   instructor de seguimiento y bitácoras. El coordinador puede consultar
+   reportes, cierres y alertas, y aprobar o rechazar correcciones; no accede a
+   configuración ni a operaciones de portería.
+   Para añadir a las fichas el campo de jornada usado por los datos de prueba,
+   respalda la base y aplica una sola vez
+   `database/migrations/013_jornada_fichas.sql`.
+   Los scripts `scripts\cargar_datos_prueba.php` y
+   `scripts\eliminar_datos_prueba.php` cargan y eliminan, respectivamente, los
+   registros de prueba solicitados. Antes de aplicar la migración o cargar los
+   datos, genera un respaldo completo con `backups\respaldo_diario.bat`.
+   Después, ejecuta desde la carpeta del proyecto
+   `C:\xampp\php\php.exe scripts\cargar_datos_prueba.php` (ajusta la ruta de PHP
+   si es distinta).    el seed crea 15 cuentas de prueba y sus carnés, además de un portátil de
+   prueba para Laura Gómez Rojas y otro para Catalina Londoño Ríos; las
+   contraseñas y PIN quedan almacenados con `password_hash`, y cada registro
+   propio queda identificado para permitir una limpieza acotada. Para retirar
+   el seed, ejecuta
+   `C:\xampp\php\php.exe scripts\eliminar_datos_prueba.php`. La limpieza aborta
+   sin cambios si detecta dependencias que impidan borrar con seguridad los
+   registros marcados; nunca elimina cuentas administradoras.
    Para aplicar la formación y asistencia por clase, respalda primero la base,
    selecciona `proyecto01` en phpMyAdmin y ejecuta una sola vez
    `database/migrations/002_formacion_asistencia_por_clase.sql`.

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#087c45">
   <title>Gestión Institucional · SENA</title>
   <link rel="icon" type="image/svg+xml" href="web/assets/images/portal-mark.svg">
-  <link rel="stylesheet" href="web/assets/css/app.css?v=20261022-learner-module-v1">
+  <link rel="stylesheet" href="web/assets/css/app.css?v=20261023-equipment-fix-v18">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -197,6 +197,16 @@
       <section id="dashboard-view" class="view">
         <p id="dashboard-message" class="message" role="status"></p>
         <div id="stats-grid" class="stats-grid"></div>
+        <section id="instructor-dashboard-panel" class="hidden">
+          <section class="panel learner-home-panel">
+            <div class="panel-heading"><div><p class="eyebrow">PANEL DEL INSTRUCTOR</p><h2>Resumen de mis fichas</h2><p>Consulta tus sesiones y las excusas pendientes de revisión.</p></div><div class="table-actions"><button class="button secondary" type="button" data-open-module="excuses">Revisar excusas</button><button class="button secondary" type="button" data-open-module="student-progress">Mis fichas</button></div></div>
+            <div id="instructor-home-stats" class="student-attendance-stats"></div>
+          </section>
+          <section class="panel learner-classes-panel">
+            <div class="panel-heading"><div><h2>Clases de hoy</h2><p>Sesiones programadas en tus fichas asignadas.</p></div><button class="button secondary" type="button" data-open-module="schedules">Ver horarios</button></div>
+            <div id="instructor-classes-today" class="learner-classes-list"></div>
+          </section>
+        </section>
         <section id="learner-dashboard-panel" class="hidden">
           <section class="panel learner-home-panel">
             <div class="panel-heading"><div><p class="eyebrow">MI FORMACIÓN</p><h2 id="learner-welcome">Bienvenido</h2><p id="learner-program-summary"></p></div><button class="button secondary" type="button" data-open-module="profile">Mi perfil</button></div>
@@ -209,6 +219,7 @@
           </section>
         </section>
         <section class="panel alerts-panel"><div class="panel-heading"><div><h2>Alertas de asistencia</h2><p>Porcentaje inferior al umbral institucional o 3 faltas consecutivas.</p></div></div><div id="attendance-alerts" class="alert-list"></div></section>
+        <section class="panel alerts-panel hidden" id="porter-alerts-panel"><div class="panel-heading"><div><h2>Alertas de portería</h2><p>Carnets bloqueados, equipos diferentes y llaves vencidas.</p></div><button class="button secondary" type="button" data-open-module="porter-dashboard">Ver historial de portería</button></div><div id="porter-alerts" class="alert-list"></div></section>
         <section class="panel chart-panel">
           <div class="panel-heading"><div><h2>Actividad del día</h2><p>Asistencia y movimientos registrados hoy</p></div><span class="period-tag">HOY</span></div>
           <div class="chart-area"><canvas id="activity-chart" aria-label="Gráfica de actividad"></canvas></div>
@@ -217,7 +228,7 @@
       </section>
       <section id="resource-view" class="view hidden">
         <section id="settings-panel" class="panel settings-panel hidden">
-          <div class="panel-heading"><div><h2>Reglas institucionales</h2><p>Administra las alertas de asistencia, los plazos institucionales y el bloqueo del PIN.</p></div></div>
+          <div class="panel-heading"><div><h2>Reglas institucionales</h2><p>Administra alertas, plazos, bloqueo del PIN y tiempo de devolución de llaves.</p></div></div>
           <form id="settings-form">
             <div class="form-grid settings-fields">
               <label>Alerta amarilla de asistencia (%)<input name="asistencia_alerta_amarilla" type="number" min="1" max="100" required></label>
@@ -226,6 +237,7 @@
               <label>Horas para corregir asistencia<input name="horas_correccion_asistencia" type="number" min="1" max="720" required></label>
               <label>Intentos permitidos para el PIN<input name="pin_intentos_maximos" type="number" min="1" max="10" required></label>
               <label>Minutos de bloqueo del PIN<input name="pin_bloqueo_minutos" type="number" min="1" max="120" required></label>
+              <label>Minutos máximos para devolver llaves<input name="minutos_prestamo_llaves" type="number" min="1" max="1440" required></label>
             </div>
             <p class="settings-note">Los umbrales de asistencia y las reglas del PIN se aplican de inmediato. Los plazos de excusas y correcciones quedan guardados para sus módulos de gestión.</p>
             <p id="settings-message" class="message" role="status"></p>
@@ -247,8 +259,17 @@
             </span>
           </div>
           <select id="attendance-ficha" class="hidden" aria-hidden="true" tabindex="-1"></select>
+          <label id="attendance-session-control" class="hidden">Sesión de formación
+            <select id="attendance-session"><option value="">Registro general (sin sesión)</option></select>
+          </label>
           <button id="attendance-refresh" class="button secondary" type="button">Actualizar lista</button>
+          <button id="attendance-scan-button" class="button secondary hidden" type="button">Escanear carné QR</button>
           <button id="availability-toggle" class="button secondary hidden" type="button">Disponibilidad semanal de ambientes</button>
+        </div>
+        <div id="attendance-scanner" class="registration-scanner hidden">
+          <video id="attendance-video" autoplay playsinline muted></video>
+          <button id="attendance-scan-stop" class="button secondary" type="button">Cerrar lector</button>
+          <p id="attendance-scan-message" class="scanner-message" role="status"></p>
         </div>
         <section id="staff-progress-overview" class="student-attendance-overview hidden" aria-label="Resumen del progreso de asistencia">
           <div class="student-overview-heading"><div><p class="eyebrow">PROGRESO DE LA FICHA</p><h2>Asistencia de los aprendices</h2><p>Porcentaje calculado con las asistencias registradas.</p></div></div>
@@ -279,7 +300,7 @@
           </form>
         </section>
         <div id="table-panel" class="panel table-panel">
-          <div class="panel-heading"><div><h2 id="table-title">Registros</h2><p id="table-description"></p></div><div class="table-actions"><select id="report-format" aria-label="Formato de reporte"><option value="csv">CSV</option><option value="xlsx">Excel</option><option value="pdf">PDF</option></select><button id="export-report" class="button secondary">Exportar</button><button id="add-record" class="button primary">＋ Nuevo registro</button></div></div>
+          <div class="panel-heading"><div><h2 id="table-title">Registros</h2><p id="table-description"></p></div><div class="table-actions"><select id="report-format" aria-label="Formato de reporte"><option value="csv">CSV</option><option value="xlsx">Excel</option><option value="pdf">PDF</option></select><button id="export-report" class="button secondary">Exportar</button><button id="export-risk-report" class="button secondary hidden">Exportar aprendices en riesgo</button><button id="add-record" class="button primary">＋ Nuevo registro</button></div></div>
           <div id="user-role-filters" class="user-role-filters hidden" aria-label="Filtrar usuarios por tipo">
             <button type="button" class="user-role-filter active" data-user-role="todos" aria-pressed="true"><span>♙</span> Todos</button>
             <button type="button" class="user-role-filter" data-user-role="instructor" aria-pressed="false"><span>✦</span> Instructores</button>
@@ -317,9 +338,20 @@
       <div class="dialog-heading"><div><p class="eyebrow">REGISTRO DE ASISTENCIA</p><h2>Editar asistencia y motivo</h2></div><button id="close-attendance-edit" class="icon-button" type="button" aria-label="Cerrar">×</button></div>
       <p id="attendance-edit-student" class="muted"></p>
       <label>Estado<select name="estado" required><option value="presente">Asistió</option><option value="ausente">No asistió</option><option value="tarde">Llegó tarde</option><option value="permiso">Permiso</option></select></label>
-      <label>Motivo<textarea name="observacion" maxlength="500" rows="3" placeholder="Escribe el motivo que verá el aprendiz."></textarea></label>
+      <label>Observación<textarea name="observacion" maxlength="500" rows="3" placeholder="Escribe la observación que verá el aprendiz." required></textarea></label>
+      <label id="attendance-correction-reason-label" class="hidden">Motivo de la corrección<textarea name="motivo_correccion" maxlength="500" rows="3" placeholder="Explica por qué se corrige el registro."></textarea></label>
       <p id="attendance-edit-message" class="message" role="status"></p>
       <div class="dialog-actions"><button class="button secondary" id="cancel-attendance-edit" type="button">Cancelar</button><button class="button primary" type="submit">Guardar cambios</button></div>
+    </form>
+  </dialog>
+  <dialog id="excuse-review-dialog">
+    <form id="excuse-review-form">
+      <div class="dialog-heading"><div><p class="eyebrow">REVISIÓN DE EXCUSA</p><h2 id="excuse-review-title">Revisar solicitud</h2></div><button id="close-excuse-review" class="icon-button" type="button" aria-label="Cerrar">×</button></div>
+      <input name="excuse_id" type="hidden">
+      <input name="decision" type="hidden">
+      <label>Observación para el aprendiz<textarea name="observacion" rows="4" maxlength="500" required></textarea></label>
+      <p id="excuse-review-message" class="message" role="status"></p>
+      <div class="dialog-actions"><button id="cancel-excuse-review" class="button secondary" type="button">Cancelar</button><button class="button primary" type="submit">Guardar revisión</button></div>
     </form>
   </dialog>
   <dialog id="learner-excuse-dialog">
@@ -348,6 +380,6 @@
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script src="web/assets/js/app.js?v=20261022-learner-module-v1"></script>
+  <script src="web/assets/js/app.js?v=20261023-equipment-fix-v18"></script>
 </body>
 </html>
